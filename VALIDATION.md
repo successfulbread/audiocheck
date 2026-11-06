@@ -1,65 +1,37 @@
-# AudioCheck v0.8 — validation record
+# AudioCheck v0.9 — validation notes
 
-## Actual uploaded recording
+## Tests executed locally
 
-- **Reference:** `01 - Hysterics Rag (A Trombone Fit) - Tony Parenti's Ragtimers.mp3`
-- **Source:** User-provided historical record MP3; original physical medium
-  not independently documented by these tests.
-- **Duration:** 168.3 seconds; MP3 128 kbps, 48 kHz stereo.
-- **Sampling:** Three distributed 25-second windows (75 seconds analyzed).
+- `PYTHONPATH=. pytest -q tests`: **49 passed** (synthetic audio plus no-signal, incorrect-standard and non-periodic-click controls).
+- Syntax compilation: `python -m py_compile analyzer.py app.py` passed.
+- Streamlit itself could not be installed in this isolated build environment, so the hosted app's visual appearance and phone file picker have **not** been run end-to-end. The theme uses the supported Streamlit `.streamlit/config.toml` format.
 
-| Measurement | v0.7 | v0.8 |
-|---|---|---|
-| Likely audio source | Disc-like crackle (weak) | **Disc transfer likely — Possible** |
-| Disc surface noise | Not independently reported | **Disc surface noise likely — Possible** |
-| Rotation speed | None detected | None detected (no reliable repeating defect) |
-| Power-system pattern | 50 and 60 Hz candidates | Ambiguous, not a claimed regional origin |
+## Uploaded reference recordings
 
-**Concrete evidence in the reference excerpt:** In the qualifying excerpts,
-there were **33 irregular high-pass click candidates**, a strongly impulsive
-high-frequency noise texture in **105 half-second frames**, and **7 quieter
-half-second frames** that still contained highly impulsive noise. These are
-measurement-specific, not a calibrated statistical probability. Some clicks
-may be missed or duplicated by MP3 encoding and music transients.
+**Everyone_Knows_That.mp3.mpeg**, supplied by user, 17.3 seconds, MP3 at 44.1 kHz:
 
-The improvement is specifically that disc evidence does **not** now require
-repeating clicks once every 0.769/1.333/1.800 seconds. The application still
-refuses to guess the RPM without a rotation-period signature.
+- TV interference: **Likely NTSC-type TV interference**, with a measured narrow frequency peak around **15,734.3 Hz** (approximately **34 dB** above nearby spectral energy on an averaged spectrum).
+- Power region: **Possible 60 Hz region (North America and others)**, *tentative*; also contained 50 Hz candidates, so no original recording country is asserted. The 60 Hz line was stronger in the initial measurements, but musical tones are an alternative explanation.
+- Source guess: **Possible TV / monitor recording**, because of the TV scan tone; this signal may have entered in a later transfer or from nearby equipment.
+- NDR-style 10 kHz dip: **Not found**.
 
-## Controlled signal checks
+**Hysterics Rag (A Trombone Fit) — Tony Parenti's Ragtimers**, supplied by user, 168.3-second MP3:
 
-**40 automated tests passed**, including:
+- Source guess: **Likely record (vinyl/shellac)**, based on short irregular impulses and crackle that persists through quiet passages. This does **not** give a trustworthy RPM.
+- Power region: a **tentative 50 Hz candidate**; not proof of a European recording location.
+- TV/FM tone: no qualifying persistent tone found.
+- NDR-style 10 kHz dip: not found.
 
-- Synthetic 33 1/3, 45 and 78 RPM rotating-click sequences.
-- Clean synthesized music, regular percussion, Gaussian hiss (disc negatives).
-- Synthetic irregular crackle with quiet run-in and run-out (disc positive).
-- 50 Hz and 60 Hz hum + harmonics mixed into synthesized music, including
-  real MP3 encoding/decoding and opposite-channel hum.
-- Broadcast-frequency tests for 19 kHz FM pilot and 15.625/15.734 kHz TV lines.
-- Five-minute MP3 length and overlength rejection.
-- YouTube URL validation, duration rejection, simulated successes/failures,
-  Deno-runtime selection and understandable error messages.
+## Engineering controls (among the 49 tests)
 
-**Additional diagnostic experiment using real historical music:** Adding
-controlled 50 Hz or 60 Hz hum plus harmonics to 25 seconds of the supplied
-MP3 produced the correct frequency-family interpretation. With smaller
-synthetic additions the result was **Tentative**, and with stronger additions
-it was **Possible**. This tests interference injected into actual music, but
-**does not establish which mains frequency, if any, is present in the
-unmodified historical recording**.
+- Idealized 33⅓, 45 and 78 RPM click trains detected.
+- Seven sparse 45 RPM clicks now produce only a *relaxed/tentative* rotation hit.
+- Regular non-impulsive drums and non-periodic pops do not automatically produce an RPM.
+- Synthetic broadband filtered material with a sharp notch at 10,000 Hz, 10,135 Hz and 10,310 Hz is detected; broadband audio without the notch is not flagged.
+- A TV tone at 15,751 Hz (slightly away from nominal NTSC) is correctly picked up. Broadband music without TV/FM lines returns no broadcast tone.
+- 50 Hz and 60 Hz hum with harmonics survives moderately compressed MP3 and opposite stereo-channel phase. Pure white noise and synth music without hum are negative controls.
+- Five-minute MP3 accepted; files exceeding five minutes rejected.
 
-## What remains unverified
+## Interpretation and limitations
 
-1. No real YouTube video was downloaded or processed from Streamlit Cloud;
-   server-side access depends on YouTube and the hosting environment.
-2. Internet Archive downloads were unreachable here. The optional manual
-   GitHub Actions benchmark has not yet run.
-3. A single real historical recording and synthetic tests cannot establish
-   a general false-positive/false-negative rate. Further known-source
-   recordings are needed, especially percussion-heavy music and cassette
-   copies made from crackling records.
-4. Surface crackle is consistent with physical discs but is not uniquely
-   attributable to them; static, damaged tape and deliberately added noise
-   can mimic the fingerprint.
-5. The recording method does not directly identify the studio, country,
-   track title or artist. 50/60 Hz hum can originate during subsequent transfer.
+These are **heuristic screens**, not scientifically validated forensic likelihoods. The RPM relaxation can produce additional false positives in rhythmic music; weak matches are explicitly tentative. The NDR notch is a filter signature and is not specific enough to establish a broadcaster. Broadcast and hum signatures can be introduced at any stage of the recording chain. More independent real-world controls (commercial vinyl, shellac 78s, cassette dubs, clean digital masters, broadcast recordings) are needed to measure sensitivity and specificity.

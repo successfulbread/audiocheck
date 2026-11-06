@@ -1,108 +1,56 @@
-# AudioCheck v0.8 — dark Streamlit edition
+# AudioCheck v0.9 — Light theme and simpler findings
 
-**Keep your existing Streamlit app and GitHub repository `audiocheck`.**
+**Repository:** `audiocheck` · **Platform:** Streamlit Community Cloud · **Entrypoint:** `app.py`
 
-## Install in GitHub
+AudioCheck screens uploaded recordings (4 seconds to 5 minutes, up to 100 MB) for possible recording-source clues. It provides **qualitative best guesses, not scientifically calibrated probabilities**.
 
-1. Download and extract the ZIP file. **Do not upload the ZIP itself** to GitHub.
-2. Open your existing GitHub repository, `audiocheck`.
-3. **Add file > Upload files**, replacing these root-level files:
-   `app.py`, `analyzer.py`, `youtube_source.py`, `requirements.txt`, `packages.txt`.
-   You may also upload this `README.md` and `VALIDATION.md`.
-4. To force the **dark theme**, preserve the file `.streamlit/config.toml`.
-   If GitHub's file chooser doesn't upload hidden folders, choose **Add file > Create new file**;
-   enter the filename `.streamlit/config.toml`; paste the contents below; commit.
-5. Click **Commit changes** on the `main` branch.
-6. Streamlit will normally redeploy automatically. Keep entrypoint `app.py`.
+## What's new
 
-The dark theme configuration is:
+- Accessible light theme, updated results layout, prominent source guess, short explanations. Strongest measured clues appear first; empty / inconclusive checks are collapsed.
+- One standard Streamlit file uploader with a separate **Analyze recording** button. YouTube URL form is still available as a beta; YouTube may block cloud-server retrieval.
+- Direct uploads of `.mp3`, `.mpeg`, `.mpga`, `.wav`, `.flac`, `.ogg` and `.m4a` are supported.
+- More permissive *tentative* 33⅓ / 45 / 78 RPM detection for shorter repeating click trains. Never infer RPM from random crackle alone.
+- More readable best-supported 50 / 60 Hz *electrical-system* clues, including a tentative guess if one candidate dominates (still no claim about the country where a song was recorded).
+- NTSC / PAL / FM high-frequency line screening accepts narrow peaks shifted slightly from their nominal frequency but requires evidence of persistence and narrowband prominence.
+- **NDR-style 10 kHz notch** detector (new). It looks for a *dip*, not a tone, within about 9.65–10.38 kHz, with persistence across overlapping segments and checks against unrelated spectral dips. This is an experimental radio-chain clue, not a definitive NDR attribution.
 
-```toml
-[theme]
-base = "dark"
-primaryColor = "#62E8CB"
-backgroundColor = "#0B1020"
-secondaryBackgroundColor = "#171F33"
-textColor = "#F2F6FF"
-font = "sans serif"
+## Update the existing Streamlit website
+
+1. Extract the ZIP.
+2. Open the GitHub repository named `audiocheck`.
+3. Replace the files at the **repository root**: `app.py`, `analyzer.py`, `youtube_source.py`, `requirements.txt`, `packages.txt`.
+4. **Important for the light theme:** replace `.streamlit/config.toml` in the `.streamlit` folder. If GitHub's browser upload doesn't preserve hidden folders, open `.streamlit/config.toml` directly on GitHub, click Edit (pencil), and replace its content with the version in this ZIP. It specifies `base = "light"`.
+5. Commit to the `main` branch. Your existing Streamlit Community Cloud app should update automatically. The main file remains `app.py`.
+6. If the original black page remains, refresh after deployment or clear the browser cache, and verify `.streamlit/config.toml` contains `base = "light"`.
+
+No Render account or redeployment setup is needed.
+
+## How it works
+
+- FFmpeg probes files and decodes up to four 25-second windows distributed across each recording.
+- Grooved-disc *surface noise* and revolution-aligned *click timings* are separate forms of evidence. Recurring clicks can suggest RPM; irregular surface crackle alone cannot.
+- Electrical hum screening looks at persistence of 50 / 60 Hz frequency families, including harmonics. A single narrow line may be music instead.
+- NTSC (approximately 15,734.26 Hz), PAL/SECAM (15,625 Hz), FM stereo pilot (19,000 Hz) are examined for narrowband persistent signals.
+- The experimental NDR notch check looks for a narrow, consistently depressed frequency band, accounting for modest tape-speed offsets.
+- Cassette/tape suggestions remain preliminary; a dropout is not uniquely a cassette defect.
+
+## Run tests
+
+If you have Python, FFmpeg, and the dependencies from `requirements.txt` installed:
+
+```sh
+PYTHONPATH=. python -m pytest -q tests
 ```
 
-The live URL remains https://audiocheckq.streamlit.app/ . If the new app fails to load,
-check **Manage app > Logs**. Python 3.12 is a safe runtime selection.
+All 49 local tests passed in this revision. These are engineering regression tests, not proof of general accuracy. See `VALIDATION.md` for the EKT and historical-record checks.
 
-## Changes
+## Limitations
 
-- Stronger distinction between **disc surface crackle** and **rotation speed**.
-  Older shellac 78 RPM discs may crackle abundantly without any repeating
-  groove scratch. They can now produce a likely disc-source result without
-  an unsupported RPM estimate.
-- More careful checks for irregular, impulsive, high-frequency noise that
-  persists in quieter parts of a song. Regular drum hits and white-noise hiss
-  are screened separately, but are not eliminated as potential false positives.
-- Positive findings appear first in a dark, colourful report, with a short
-  **What the evidence suggests** interpretation. Missing and inconclusive
-  measurements are collapsed under **Other checks**.
-- Improved 50/60 Hz interpretation when one family has a persistent strong
-  tone plus a weaker harmonic, but rival family only has weak hints. We never
-  equate a mains frequency with the country of original recording.
-- YouTube beta installs a supported Deno JavaScript runtime with the `deno`
-  Python wheel, alongside the current `yt-dlp[default]` solver components.
-  More descriptive errors distinguish missing runtime, YouTube bot checks and
-  HTTP 403 blocking. **It remains best-effort**; YouTube often blocks hosted
-  downloaders regardless of correct dependencies.
-- Five-minute maximum remains. Analyzes up to four distributed 25-second
-  segments for speed, including the start and end of a song.
+- A TV line or mains signal may have entered through later copying, playback, or digitization; it cannot identify the original studio location.
+- Strong musical notes may imitate 50 / 60 Hz interference; even an electronic harmonic family can be ambiguous.
+- A TV-related frequency does not prove the song was broadcast on television; it might come from a nearby CRT monitor.
+- The 10 kHz dip is **not unique to NDR**; it was a useful clue in the TMS case, not a station ID encoded in every recording.
+- A record may have no repeating scratch, and a cassette can inherit scratches from vinyl. Shellac 78s are not made of vinyl; the app uses `record (vinyl/shellac)` rather than implying all historical records are vinyl.
+- The entire Streamlit interface and actual live YouTube retrieval were not exercised in this offline build environment; the Python analyzer and test suite were.
 
-## Real-world reference check
-
-The user-provided historical recording `Hysterics Rag (A Trombone Fit)`
-(2 minutes 48 seconds, MP3) was measured locally, **but is not included** in
-this repository or the distributed ZIP.
-
-Before this revision, v0.7 reported `Disc-like crackle (weak)` and no matching
-RPM. v0.8 reports **`Disc transfer likely`** and **`Disc surface noise likely`**.
-The analyzer observed irregular impulsive clicks in multiple excerpts and
-impulsive noise during quieter passages. See `VALIDATION.md` for details.
-
-This is one historical reference example, **not a validated diagnostic
-accuracy**. Test with known-clean music, true cassette copies, radio recordings,
-well-transferred 78s, LPs and 45s before trusting broad source classifications.
-
-## Optional: benchmark public historical recordings
-
-The directory `scripts/` contains an optional benchmark that downloads a small
-sample of Internet Archive MP3s **temporarily** and prints a JSON report.
-It accepts a single Archive item or collection identifier, e.g. `78rpm_donald_ross`.
-Nothing is redistributed and downloaded audio is removed at the end.
-
-The `.github/workflows/archive_benchmark.yml` GitHub Actions workflow lets you
-run the benchmark on GitHub's servers:
-
-1. Upload the optional `scripts/benchmark_archive.py` and `.github/workflows/archive_benchmark.yml`, preserving the paths.
-2. On GitHub go to **Actions > Benchmark historical disc recordings > Run workflow**.
-3. Read the console log, or download the generated `archive-audiocheck-results` artifact.
-
-The archive.org network was not reachable in the development environment, so
-this optional benchmark has **not** been run on those downloaded files here.
-The provided historical MP3 was tested locally. The benchmark identifies
-potential disc indicators, not a scientifically calibrated false-positive rate.
-
-## Engineering notes
-
-Use Python 3.12+ with FFmpeg installed. The app has three main source files.
-No `pydub` dependency. Tests can run using:
-
-```bash
-python -m pip install numpy scipy pytest
-python -m pytest -q
-```
-
-The analyser is evidence-oriented: a positive can indicate an earlier stage
-in a recording chain, not necessarily the final source or original studio.
-78 RPM records are commonly **shellac**, not vinyl. Their crackle does not
-by itself determine a precise rotation speed.
-
-YouTube downloads should only be attempted when allowed by the platform and
-applicable rights. Public visibility does not itself establish permission.
-Uploaded files are processed temporarily; please consider your hosting
-provider's privacy terms before submitting unreleased audio.
+No uploaded audio is intentionally stored in GitHub. Standard Streamlit file uploads are processed in memory, with temporary-file handling during decoding/YouTube extraction.
