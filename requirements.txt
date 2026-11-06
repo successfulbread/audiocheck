@@ -1,4 +1,3 @@
-streamlit>=1.40,<2
+streamlit>=1.53,<2
 numpy>=1.26,<3
 scipy>=1.13,<2
-pydub==0.25.1
