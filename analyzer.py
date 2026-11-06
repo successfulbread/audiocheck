@@ -372,6 +372,107 @@ def _crackle_window(audio):
     return max(channel_counts, default=0)
 
 
+def _surface_noise_window(audio):
+    """Screen for irregular broadband disc surface crackle.
+
+    Unlike RPM detection, this does NOT require one defect per revolution.
+    Check high-pass impulsiveness in half-second frames, and preferentially
+    count noise in quiet passages. Short, regular drums must not be treated
+    as record-surface evidence on their own.
+
+    Output is an evidence feature set, NOT a calibrated probability.
+    """
+    channel_reports = []
+    for channel in range(audio.shape[1]):
+        work = signal.resample_poly(audio[:, channel].astype(np.float64), 160, 441)
+        fs = 16000
+        high = signal.sosfilt(
+            signal.butter(4, 3800, btype="highpass", fs=fs, output="sos"), work
+        )
+        frame = fs // 2
+        n = len(work) // frame
+        if n < 8:
+            continue
+        raw = work[:n * frame].reshape(n, frame)
+        upper = high[:n * frame].reshape(n, frame)
+        full_rms = np.sqrt(np.mean(raw * raw, axis=1) + 1e-20)
+        high_rms = np.sqrt(np.mean(upper * upper, axis=1) + 1e-20)
+        ratio = high_rms / (full_rms + 1e-12)
+        centered = upper - upper.mean(axis=1, keepdims=True)
+        variance = np.mean(centered * centered, axis=1)
+        fourth = np.mean(centered ** 4, axis=1)
+        kurt = fourth / (variance * variance + 1e-22)
+        active = (full_rms > 0.00020) & (high_rms > 0.00015)
+        typical = max(float(np.median(full_rms[active])) if np.any(active) else 0, 1e-5)
+        quiet = (active & (full_rms < 0.52 * typical)
+                 & (ratio >= 0.115) & (kurt >= 10))
+        crackly = active & (kurt >= 11) & (ratio >= .045)
+        # Existing strong impulsive-click detector is additional independent
+        # evidence; use CV to reject exact click trains / drum machines.
+        events = _click_candidates(audio[:, channel], SAMPLE_RATE)
+        gaps = np.diff(events)
+        irregular = bool(len(events) >= 10 and len(gaps) >= 7 and
+                         np.std(gaps) / max(np.mean(gaps), 1e-12) > .58)
+        event_frames = np.floor(events * 2).astype(int)
+        quiet_clicks = int(sum(0 <= t < len(quiet) and quiet[t] for t in event_frames))
+        channel_reports.append({
+            "quiet_frames": int(quiet.sum()),
+            "crackly_frames": int(crackly.sum()),
+            "frames": int(active.sum()),
+            "clicks": int(len(events)),
+            "quiet_clicks": quiet_clicks,
+            "irregular": irregular,
+            "high_frequency_ratio": float(np.median(ratio[active])) if np.any(active) else 0.0,
+        })
+    if not channel_reports:
+        return {"quiet_frames": 0, "crackly_frames": 0, "frames": 0,
+                "clicks": 0, "quiet_clicks": 0, "irregular": False,
+                "high_frequency_ratio": 0.0}
+    return max(channel_reports, key=lambda r: (
+        r["quiet_frames"] * 5 + min(r["crackly_frames"], 30)
+        + min(r["clicks"], 30) * .2
+    ))
+
+
+def _consolidate_surface(windows):
+    """Conservative qualitative disc-noise conclusion from independent clues."""
+    reports = [w["surface"] for w in windows]
+    quiet = sum(r["quiet_frames"] for r in reports)
+    broad = sum(r["crackly_frames"] for r in reports)
+    clicks = sum(r["clicks"] for r in reports if r["irregular"])
+    broad_sections = sum(r["crackly_frames"] >= 9 for r in reports)
+    irregular_sections = sum(r["irregular"] for r in reports)
+    # Most convincing: irregular impulses and granular non-Gaussian HF noise
+    # *during quiet passages*, which are less likely to be drums.
+    if quiet >= 3 and broad >= 8 and irregular_sections >= 1:
+        detail = (f"Detected irregular short clicks ({clicks} in qualifying sections) "
+                  f"and a crackling high-frequency texture in {broad} half-second frames. "
+                  f"Importantly, {quiet} noisy frames occurred during quieter passages, "
+                  "where ordinary musical percussion is less likely to explain them. "
+                  "This strongly suggests a transferred grooved disc (vinyl or shellac); "
+                  "it does not reveal record RPM or prove the last playback device was a turntable.")
+        return verdict("Disc surface noise likely", "Possible", detail)
+    if (irregular_sections >= 2 and broad_sections >= 2 and broad >= 20) or (
+        quiet >= 3 and broad >= 14):
+        return verdict(
+            "Disc-like surface crackle", "Tentative",
+            f"Random short impulses and a granular high-frequency texture appear in "
+            f"{broad} half-second frames, including {quiet} quiet frames. "
+            "These are consistent with a disc transfer but could be noise from another source.",
+        )
+    if irregular_sections and broad >= 12:
+        return verdict(
+            "Some surface-crackle evidence", "Tentative",
+            f"Irregular impulsive noise and high-frequency transients appear in {broad} "
+            "half-second frames, but quiet-section corroboration is insufficient.",
+        )
+    return verdict(
+        "No distinctive disc crackle found", "Not detected",
+        "No sufficiently corroborated irregular high-frequency crackle appeared "
+        "in the sections analyzed. Clean records may produce none.",
+    )
+
+
 def _consolidate_vinyl(windows):
     hits = [w["vinyl"] for w in windows if w["vinyl"]]
     if not hits:
@@ -423,9 +524,17 @@ def _consolidate_electrical(windows):
                        "No persistent narrowband 50/60 Hz peaks cleared even the weak-signal threshold. "
                        "A clean recording can contain no mains hum.")
     if rival[1] > 0 and (top[1]-rival[1] < 1 and top[2] <= rival[2]+2):
-        return verdict("50 and 60 Hz candidates", "Tentative",
-                       "Both frequency families have measurable lines. The recording may mix "
-                       "different sources, or pitched musical tones may imitate hum.")
+        # If one family has a persistent *strong* line plus a corroborating
+        # harmonic and the rival has only weak lines, prefer the former, but
+        # keep the result tentative. Otherwise avoid guessing a continent.
+        top_strong = sum(section["count"] for section in top[7])
+        rival_strong = sum(section["count"] for section in rival[7])
+        top_weak = sum(section["weak"] for section in top[7])
+        if not (top_strong >= 1 and top_weak >= 1 and rival_strong == 0):
+            return verdict("50 and 60 Hz candidates", "Tentative",
+                           "Both frequency families have measurable lines, but not "
+                           "enough independent harmonic evidence to choose one. "
+                           "Musical notes may imitate electrical hum.")
     base, level, total, rich, corroborated, singles, weak_only, sections = top
     region = "50 Hz regions (e.g. Europe)" if base == 50 else "60 Hz regions (e.g. N. America)"
     freq_set = []
@@ -573,7 +682,7 @@ def analyze_path(path, file_name=None):
         fm = air.get("FM stereo pilot")
         pilot_jitter = (_pilot_variation_hz(audio)
                         if fm and fm["pass"] and fm.get("persistent") else None)
-        analyzed.append({"vinyl":_vinyl_window(audio), "crackle":_crackle_window(audio), "mains":mains,
+        analyzed.append({"vinyl":_vinyl_window(audio), "surface":_surface_noise_window(audio), "mains":mains,
                          "broadcast":air, "cutoff":cutoff, "dropouts":_dropout_candidates(audio),
                          "clipped":float(np.mean(np.abs(audio) >= .998)),
                          "pilot_jitter":pilot_jitter, "stereo_corr":stereo_corr})
@@ -582,33 +691,44 @@ def analyze_path(path, file_name=None):
     if not analyzed:
         raise ValueError("The audio was silent or too faint to analyze.")
     rotation = _consolidate_vinyl(analyzed)
+    surface = _consolidate_surface(analyzed)
     electrical = _consolidate_electrical(analyzed)
     broadcast = _consolidate_broadcast(analyzed)
     diag = _diagnostics(analyzed)
     fm = "FM stereo pilot" in broadcast["result"] and broadcast["certainty"] in {"Possible","Tentative"}
     vinyl = rotation["certainty"] == "Possible"
     tape = diag["possible_interruptions"] >= 2
-    crackle_sections = sum(w["crackle"] >= 7 for w in analyzed)
-    crackle_hint = crackle_sections >= 2 or (len(analyzed)==1 and crackle_sections==1)
-    if fm and vinyl:
-        source = verdict("Vinyl + FM clues", "Possible", "Vinyl-like repetition and FM pilot both appear; the recording may have passed through several media.")
+    surface_likely = surface["result"] == "Disc surface noise likely"
+    surface_hint = surface["certainty"] in ("Possible", "Tentative")
+    if fm and (vinyl or surface_likely):
+        source = verdict("Disc transfer, possible FM chain", "Possible",
+                         "Both disc-surface artifacts and a 19 kHz FM pilot are present. "
+                         "A record may have been broadcast or later copied from radio. "
+                         + surface["detail"])
     elif vinyl:
-        source = verdict("Vinyl transfer likely", "Possible", rotation["detail"])
+        source = verdict("Disc transfer likely", "Possible",
+                         "Recurring physical clicks aligned to a turntable revolution. "
+                         + rotation["detail"])
+    elif surface_likely:
+        source = verdict("Disc transfer likely", "Possible",
+                         "The main clues are irregular, high-frequency surface crackle, "
+                         "including noise in quieter passages. "
+                         + surface["detail"])
     elif fm:
         source = verdict("FM radio transfer possible", "Possible", broadcast["detail"])
+    elif surface_hint:
+        source = verdict("Disc transfer possible", "Tentative", surface["detail"])
     elif tape:
         source = verdict("Tape-like transfer (weak)", "Tentative",
-                         "Multiple abrupt interruptions resemble tape dropouts, but audio edits and digital glitches can do the same.")
-    elif crackle_hint:
-        source = verdict("Disc-like crackle (weak)", "Tentative",
-                         f"Irregular short clicks appeared in {crackle_sections} section(s), consistent with surface noise. "
-                         "No rotation-linked scratch was verified. Percussion or transfer glitches may imitate this.")
+                         "Several abrupt interruptions resemble tape dropouts, "
+                         "but digital edits and sound effects can do the same.")
     else:
-        source = verdict("No clear carrier fingerprint", "Not measurable",
-                         "No reliable vinyl rotation, FM pilot or multiple dropouts. A clean cassette, clean vinyl transfer and digital master may be indistinguishable.")
+        source = verdict("Source not established", "Not measurable",
+                         "No distinctive disc-noise, rotation, FM pilot or tape "
+                         "pattern was supported. A clean disc can sound like a clean tape.")
     stereo = _stereo_format(analyzed, metadata["channels"])
-    if vinyl:
-        medium = verdict("Disc-transfer evidence", "Possible", "A repeating defect is consistent with a rotating disc somewhere in the transfer history.")
+    if vinyl or surface_likely:
+        medium = verdict("Disc-transfer evidence", "Possible", "Noise and/or a repeating defect are consistent with a grooved disc somewhere in the transfer chain.")
     elif tape:
         medium = verdict("Tape-like dropout evidence", "Tentative", "Brief interruptions may suggest tape, but are not a conclusive source identification.")
     elif fm:
@@ -623,6 +743,7 @@ def analyze_path(path, file_name=None):
                  if cutoff is not None else verdict("Cannot assess", "Not measurable", "No usable spectrum."))
     rows = [
         ("Likely audio source", source),
+        ("Disc surface noise", surface),
         ("Vinyl rotation", rotation),
         ("Likely power system", electrical),
         ("Radio / TV signals", broadcast),

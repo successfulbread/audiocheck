@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from urllib.parse import parse_qs, urlsplit
@@ -49,12 +50,58 @@ def canonical_youtube_url(link: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
+def _runtime_args() -> list[str]:
+    """Enable a proper JS runtime for modern yt-dlp YouTube extraction.
+
+    The PyPI `deno` wheel contains a platform-specific Deno executable. This
+    avoids relying on the old distro nodejs in Streamlit Cloud.
+    """
+    candidate = None
+    try:
+        import deno
+        candidate = deno.find_deno_bin()
+    except (ImportError, AttributeError, OSError):
+        pass
+    candidate = candidate or shutil.which("deno")
+    if candidate and Path(candidate).is_file():
+        return ["--js-runtimes", f"deno:{candidate}"]
+    # Node >=22 is supported, but apt versions may be too old.
+    node = shutil.which("node")
+    if node:
+        try:
+            version = subprocess.run([node, "--version"], capture_output=True, text=True,
+                                     timeout=3, check=False).stdout.strip().lstrip("v")
+            if int(version.split(".")[0]) >= 22:
+                return ["--js-runtimes", f"node:{node}"]
+        except (ValueError, IndexError, OSError, subprocess.TimeoutExpired):
+            pass
+    return []
+
+
+def _failure_message(result: subprocess.CompletedProcess) -> str:
+    """Explain the failure category, without exposing URLs, tokens or raw logs."""
+    message = str(result.stderr or "").lower()
+    if "sign in to confirm" in message or "not a bot" in message:
+        return ("YouTube requires a human verification for this cloud server. "
+                "AudioCheck cannot complete that request; upload the audio file instead.")
+    if "403" in message or "forbidden" in message:
+        return ("YouTube refused the audio request (HTTP 403) from Streamlit Cloud. "
+                "This may be a server-IP restriction; upload the audio file instead.")
+    if "js runtime" in message or "javascript runtime" in message or "ejs" in message:
+        return ("YouTube's JavaScript verification could not run on this server. "
+                "Check that the deno and yt-dlp dependencies deployed successfully.")
+    if "private video" in message or "unavailable" in message:
+        return "The YouTube video or its audio format is unavailable for this request."
+    return ("YouTube audio retrieval was unsuccessful from Streamlit Cloud. "
+            "Please upload the audio file directly if permitted.")
+
+
 def _run_yt_dlp(extra_args: list[str], url: str, timeout: int) -> subprocess.CompletedProcess:
     cmd = [
         sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist",
         "--no-warnings", "--no-progress", "--socket-timeout", "12",
         "--retries", "1", "--fragment-retries", "1", "--no-cache-dir",
-        *extra_args, url,
+        *_runtime_args(), *extra_args, url,
     ]
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
@@ -75,10 +122,7 @@ def download_youtube_audio(url: str, directory: Path) -> tuple[Path, str]:
 
     probe = _run_yt_dlp(["--dump-single-json", "--skip-download"], url, timeout=40)
     if probe.returncode != 0:
-        raise ValueError(
-            "YouTube could not provide this video's audio information on this server. "
-            "It may be restricted or block automated retrieval. Try uploading the file instead."
-        )
+        raise ValueError(_failure_message(probe))
     try:
         info = json.loads(probe.stdout)
         duration = float(info.get("duration"))
@@ -94,10 +138,7 @@ def download_youtube_audio(url: str, directory: Path) -> tuple[Path, str]:
         "--max-filesize", "100M", "--output", str(directory / "youtube.%(ext)s"),
     ], url, timeout=120)
     if result.returncode != 0:
-        raise ValueError(
-            "YouTube audio couldn't be retrieved from Streamlit Cloud. "
-            "Try uploading the file directly."
-        )
+        raise ValueError(_failure_message(result))
     allowed = {".m4a", ".webm", ".ogg", ".mp3", ".opus", ".wav"}
     files = [p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in allowed]
     if len(files) != 1:

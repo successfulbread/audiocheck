@@ -1,69 +1,108 @@
-# AudioCheck v0.7 — Streamlit: submit button + YouTube URL (beta)
+# AudioCheck v0.8 — dark Streamlit edition
 
-This release **stays on Streamlit**. It is not the separate Render/FastAPI edition.
+**Keep your existing Streamlit app and GitHub repository `audiocheck`.**
 
-## Install/update on your existing site
+## Install in GitHub
 
-1. Extract this ZIP; open your GitHub repository `audiocheck`.
-2. Upload these **five files** to the repository root, replacing old versions:
+1. Download and extract the ZIP file. **Do not upload the ZIP itself** to GitHub.
+2. Open your existing GitHub repository, `audiocheck`.
+3. **Add file > Upload files**, replacing these root-level files:
    `app.py`, `analyzer.py`, `youtube_source.py`, `requirements.txt`, `packages.txt`.
-   `README.md` may also be replaced. GitHub should show these files at the same level.
-3. Commit changes on `main`; keep Streamlit's entrypoint as **`app.py`**.
-4. Streamlit Community Cloud should redeploy and retain your existing URL.
-5. Open the app directly in Chrome, select a file, and press **Analyze recording**.
-   Or choose the YouTube tab, enter a permitted URL and press its submit button.
+   You may also upload this `README.md` and `VALIDATION.md`.
+4. To force the **dark theme**, preserve the file `.streamlit/config.toml`.
+   If GitHub's file chooser doesn't upload hidden folders, choose **Add file > Create new file**;
+   enter the filename `.streamlit/config.toml`; paste the contents below; commit.
+5. Click **Commit changes** on the `main` branch.
+6. Streamlit will normally redeploy automatically. Keep entrypoint `app.py`.
 
-Older files like `alt_uploader.py`, `main.py`, `Dockerfile`, and `render.yaml` may remain
-in GitHub but are **not used by the Streamlit app**. Do **not** upload the ZIP itself.
+The dark theme configuration is:
 
-## Upload method
+```toml
+[theme]
+base = "dark"
+primaryColor = "#62E8CB"
+backgroundColor = "#0B1020"
+secondaryBackgroundColor = "#171F33"
+textColor = "#F2F6FF"
+font = "sans serif"
+```
 
-The file uploader is now inside `st.form()` with a dedicated submit button.
-Changing/selecting a file does not automatically trigger the Python analysis.
-This is Streamlit's supported upload flow and avoids the previous custom upload
-component, but **cannot repair** failures inside Android's file picker or an
-unstable mobile/Streamlit connection. Streamlit must still receive the file.
+The live URL remains https://audiocheckq.streamlit.app/ . If the new app fails to load,
+check **Manage app > Logs**. Python 3.12 is a safe runtime selection.
 
-- Formats: MP3, WAV, FLAC, OGG, M4A; max 100 MB / 5 minutes.
-- Analyses up to four distributed nonoverlapping 25-second portions for speed.
-- Results include a coloured signal summary and expandable explanations.
+## Changes
 
-## YouTube URLs (experimental)
+- Stronger distinction between **disc surface crackle** and **rotation speed**.
+  Older shellac 78 RPM discs may crackle abundantly without any repeating
+  groove scratch. They can now produce a likely disc-source result without
+  an unsupported RPM estimate.
+- More careful checks for irregular, impulsive, high-frequency noise that
+  persists in quieter parts of a song. Regular drum hits and white-noise hiss
+  are screened separately, but are not eliminated as potential false positives.
+- Positive findings appear first in a dark, colourful report, with a short
+  **What the evidence suggests** interpretation. Missing and inconclusive
+  measurements are collapsed under **Other checks**.
+- Improved 50/60 Hz interpretation when one family has a persistent strong
+  tone plus a weaker harmonic, but rival family only has weak hints. We never
+  equate a mains frequency with the country of original recording.
+- YouTube beta installs a supported Deno JavaScript runtime with the `deno`
+  Python wheel, alongside the current `yt-dlp[default]` solver components.
+  More descriptive errors distinguish missing runtime, YouTube bot checks and
+  HTTP 403 blocking. **It remains best-effort**; YouTube often blocks hosted
+  downloaders regardless of correct dependencies.
+- Five-minute maximum remains. Analyzes up to four distributed 25-second
+  segments for speed, including the start and end of a song.
 
-The app accepts a single standard YouTube video URL (watch/shorts/live page or
-youtu.be link) and downloads its audio using yt-dlp **only when permitted**.
-It rejects playlists, videos longer than five minutes, and arbitrary websites.
-It does not access private videos, cookies, logged-in sessions, DRM, or paywalls.
+## Real-world reference check
 
-**Important:** YouTube's Terms of Service restrict downloading without proper
-authorization. The feature should only be used when downloading is expressly
-permitted by YouTube and applicable rightsholders. Merely being publicly visible
-or labelled Creative Commons does not automatically override YouTube's terms.
+The user-provided historical recording `Hysterics Rag (A Trombone Fit)`
+(2 minutes 48 seconds, MP3) was measured locally, **but is not included** in
+this repository or the distributed ZIP.
 
-YouTube frequently changes its access controls. yt-dlp now recommends an
-external JavaScript runtime (Deno/Node 22+) and the `yt-dlp-ejs` component.
-The Python dependency `yt-dlp[default]` includes the solver component, but
-Streamlit Community Cloud may not have a supported JavaScript runtime.
-YouTube may also reject requests from cloud servers. The YouTube tab should
-therefore be treated as **best-effort beta**; **file uploads remain preferred**.
-Failure to fetch YouTube audio is not an audio-analysis result.
+Before this revision, v0.7 reported `Disc-like crackle (weak)` and no matching
+RPM. v0.8 reports **`Disc transfer likely`** and **`Disc surface noise likely`**.
+The analyzer observed irregular impulsive clicks in multiple excerpts and
+impulsive noise during quieter passages. See `VALIDATION.md` for details.
 
-## Technical notes
+This is one historical reference example, **not a validated diagnostic
+accuracy**. Test with known-clean music, true cassette copies, radio recordings,
+well-transferred 78s, LPs and 45s before trusting broad source classifications.
 
-Uses the enhanced v0.6 analyzer from AudioCheck: up to 5 minutes, 50/60 Hz
-multi-harmonic detection, 33 1/3 / 45 / 78 RPM click periodicity, FM/TV tone
-screening, stereo analysis, dropout hints and measured bandwidth.
-YouTube audio often uses lossy compression which may remove high frequencies,
-FM pilot remnants, electrical hum and clicks, reducing sensitivity.
+## Optional: benchmark public historical recordings
 
-The server downloads/decodes temporary audio and deletes it after analysis.
-To validate detection with reference recordings, use `tests/test_analyzer.py`
-and the v0.6 public-reference test workflow if already installed.
+The directory `scripts/` contains an optional benchmark that downloads a small
+sample of Internet Archive MP3s **temporarily** and prints a JSON report.
+It accepts a single Archive item or collection identifier, e.g. `78rpm_donald_ross`.
+Nothing is redistributed and downloaded audio is removed at the end.
 
-## Troubleshooting
+The `.github/workflows/archive_benchmark.yml` GitHub Actions workflow lets you
+run the benchmark on GitHub's servers:
 
-- `No audio file reached AudioCheck`: select again; try Chrome or a computer.
-- YouTube inaccessible: paste a direct file upload instead; YouTube may refuse
-  automated server-side audio retrieval.
-- Install failures: check Streamlit's **Manage app → Logs**.
-- Python 3.12 is recommended on Streamlit Cloud; `pydub` is not used.
+1. Upload the optional `scripts/benchmark_archive.py` and `.github/workflows/archive_benchmark.yml`, preserving the paths.
+2. On GitHub go to **Actions > Benchmark historical disc recordings > Run workflow**.
+3. Read the console log, or download the generated `archive-audiocheck-results` artifact.
+
+The archive.org network was not reachable in the development environment, so
+this optional benchmark has **not** been run on those downloaded files here.
+The provided historical MP3 was tested locally. The benchmark identifies
+potential disc indicators, not a scientifically calibrated false-positive rate.
+
+## Engineering notes
+
+Use Python 3.12+ with FFmpeg installed. The app has three main source files.
+No `pydub` dependency. Tests can run using:
+
+```bash
+python -m pip install numpy scipy pytest
+python -m pytest -q
+```
+
+The analyser is evidence-oriented: a positive can indicate an earlier stage
+in a recording chain, not necessarily the final source or original studio.
+78 RPM records are commonly **shellac**, not vinyl. Their crackle does not
+by itself determine a precise rotation speed.
+
+YouTube downloads should only be attempted when allowed by the platform and
+applicable rights. Public visibility does not itself establish permission.
+Uploaded files are processed temporarily; please consider your hosting
+provider's privacy terms before submitting unreleased audio.

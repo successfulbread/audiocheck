@@ -1,4 +1,4 @@
-"""AudioCheck v0.7 - Streamlit upload form + optional YouTube link."""
+"""AudioCheck v0.8: dark-themed Streamlit audio provenance analysis."""
 from __future__ import annotations
 
 import html
@@ -10,70 +10,87 @@ import streamlit as st
 from analyzer import MAX_BYTES, analyze, analyze_path
 from youtube_source import download_youtube_audio
 
-st.set_page_config(
-    page_title="AudioCheck | Sonic Archaeology",
-    page_icon="🎛️",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
+st.set_page_config(page_title="AudioCheck | Audio Archaeology", page_icon=":material/album:",
+                   layout="centered", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
-  :root { --ink: #172044; --lavender: #ece8ff; --mint: #b1f3de; }
-  .block-container { max-width: 940px; padding-top: 1.5rem; padding-bottom: 4rem; }
-  .ac-hero { border-radius: 22px; padding: 26px 27px 21px;
-    background: linear-gradient(120deg,#361a70 0%,#6236aa 42%,#087d98 100%);
-    box-shadow: 0 12px 30px rgba(50,34,117,.20); color: white; margin-bottom: 15px; }
-  .ac-eyebrow {font-size: .78rem; font-weight: 800; text-transform: uppercase;
-    color:#bff6ed; letter-spacing:.17em;}
-  .ac-title {font-weight: 850; letter-spacing: -.045em; font-size:clamp(2.2rem,6vw,3.5rem);
-    line-height:1.08; color:#fff; margin: 8px 0 7px;}
-  .ac-subtitle { font-size:1rem; color:#eff7ff; line-height:1.5; margin-bottom: 7px; }
-  .ac-pill {display:inline-block; border:1px solid #ffffff88; border-radius:40px;
-    padding:5px 10px; font-size: .73rem; font-weight:700; margin:6px 6px 0 0; color:white;}
-  .ac-section {margin:25px 0 10px; font-size:1.38rem; font-weight:800;}
-  .ac-help {font-size:.89rem;color:#64718c;margin-bottom: 14px;}
-  .ac-grid {display:grid; grid-template-columns:repeat(auto-fit,minmax(245px,1fr)); gap:13px;
-    margin-top:14px;margin-bottom:20px;}
-  .ac-card {background:#fff; border:1px solid #dce0f4; border-radius:18px;
-    box-shadow:0 5px 18px rgba(35,37,90,.06);padding:17px 17px 14px; color:var(--ink);}
-  .ac-card.ac-strong {border-top:5px solid #02ad90;}
-  .ac-card.ac-maybe {border-top:5px solid #a264df;}
-  .ac-card.ac-muted {border-top:5px solid #c5cad8;}
-  .ac-label {font-size:.77rem;letter-spacing:.045em;text-transform:uppercase;
-    font-weight:800;color:#64718d;margin-bottom:8px;}
-  .ac-value {font-size:1.15rem; font-weight:820;line-height:1.3;min-height:1.5rem; margin-bottom:9px;}
-  .ac-badge {display:inline-block;padding:4px 9px;border-radius:99px;font-size:.73rem;font-weight:800;}
-  .ac-badge.ac-strong {background:#d7f8e9;color:#08795f;}
-  .ac-badge.ac-maybe {background:#eee1ff;color:#7638aa;}
-  .ac-badge.ac-muted {background:#eef0f4;color:#596578;}
-  .ac-card details {margin-top:12px; border-top:1px solid #e8e9f5;padding-top:9px;}
-  .ac-card summary {font-size:.78rem; color:#56658a;cursor:pointer; font-weight:700;}
-  .ac-card details p {color:#39425d; font-size:.81rem; line-height:1.55; margin:8px 0 0;}
-  .ac-summary {border-radius:15px;background:linear-gradient(125deg,#e5fff6,#eae8ff);
-    border:1px solid #d3ddf1; padding:14px 17px; color:#253758; margin:8px 0 13px;}
-  .ac-note {font-size:.83rem;color:#617084;line-height:1.48;margin:5px 0 14px;}
-  @media(max-width: 650px){.ac-hero{padding:22px 20px 18px}.ac-grid{grid-template-columns:1fr}}
+:root {color-scheme: dark;}
+.stApp{background:#0B1020;color:#F2F6FF;}
+.block-container{max-width:980px;padding-top:1.2rem;padding-bottom:3rem;}
+header[data-testid="stHeader"]{background:transparent;}
+.ac-hero{background:radial-gradient(circle at 85% -15%,rgba(0,226,204,.27),transparent 55%),
+ linear-gradient(115deg,#252059,#131b39 55%,#0d2136);border:1px solid #45418a;
+ border-radius:24px;padding:29px 27px 25px;margin-bottom:20px;
+ box-shadow:0 14px 44px #030618bb;position:relative;overflow:hidden;}
+.ac-eyebrow{text-transform:uppercase;letter-spacing:.19em;color:#62ebdb;
+ font-size:.73rem;font-weight:850;}
+.ac-title{font-size:clamp(2.3rem,7vw,4.1rem);font-weight:900;color:#fff;
+ line-height:1.02;letter-spacing:-.055em;margin:10px 0 10px;}
+.ac-title b{color:#62f4d4;font-weight:900;}
+.ac-sub{color:#b9c7dc;line-height:1.5;font-size:.95rem;max-width:630px;}
+.ac-tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px;}
+.ac-tag{background:#ffffff12;border:1px solid #ffffff26;color:#d7e4ff;
+ padding:6px 10px;border-radius:30px;font-size:.73rem;font-weight:700;}
+.ac-heading{font-weight:850;font-size:1.3rem;color:#f7f8ff;
+ letter-spacing:-.025em;margin:20px 0 8px;}
+.ac-help{font-size:.88rem;color:#97a9c6;margin:0 0 13px;line-height:1.6;}
+.ac-meta{background:#121b30;border:1px solid #2a3d59;color:#b9c9e5;
+ border-radius:15px;padding:13px 17px;margin:15px 0 19px;font-size:.84rem;}
+.ac-meta strong{color:#fff;display:block;font-size:.95rem;margin-bottom:3px;}
+.ac-source{background:linear-gradient(120deg,#1b2843,#152c35 80%);
+ border:1px solid #377d80;border-left:5px solid #4aebc9;
+ border-radius:19px;padding:22px 23px 17px;margin:13px 0 16px;
+ box-shadow:0 7px 24px #021a22a6;}
+.ac-eyepill{font-size:.7rem;letter-spacing:.16em;font-weight:900;
+ text-transform:uppercase;color:#7bfce3;margin-bottom:9px;}
+.ac-source-title{color:#f6faff;font-weight:900;font-size:1.42rem;
+ line-height:1.23;margin-bottom:9px;}
+.ac-source-reason{font-size:.91rem;color:#c5e5e4;line-height:1.55;}
+.ac-main-copy{background:#172139;border:1px solid #313c63;border-radius:18px;
+ padding:17px 20px;margin:0 0 21px;color:#d7e2f3;}
+.ac-main-copy h4{font-size:.93rem;color:#a5f0ff;margin:0 0 7px;}
+.ac-main-copy p{font-size:.87rem;line-height:1.66;margin:0;}
+.ac-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));
+ gap:13px;margin:13px 0 23px;}
+.ac-card{background:#151d30;border:1px solid #303d58;border-radius:16px;
+ padding:16px 16px 13px;box-shadow:0 5px 16px #050b1e88;}
+.ac-card.good{border-top:4px solid #56e0ca;}
+.ac-card.possible{border-top:4px solid #a993fa;}
+.ac-card.weak{border-top:4px solid #f5bd64;}
+.ac-label{font-size:.69rem;color:#98b1d0;font-weight:850;
+ text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;}
+.ac-result{font-size:1.1rem;line-height:1.3;color:#f8fbff;
+ font-weight:850;margin-bottom:12px;}
+.ac-badge{border-radius:99px;padding:4px 9px;display:inline-block;
+ font-size:.7rem;font-weight:850;}
+.ac-badge.good{background:#1b4c46;color:#a3ffe9;}
+.ac-badge.possible{background:#3c2d63;color:#e5c6ff;}
+.ac-badge.weak{background:#573e22;color:#ffdc9a;}
+.ac-card details{border-top:1px solid #2c3a55;margin-top:12px;padding-top:10px;}
+.ac-card summary{cursor:pointer;font-weight:750;color:#c1d2f3;font-size:.8rem;}
+.ac-card details p{font-size:.79rem;line-height:1.55;color:#b2c2d9;margin:9px 0 0;}
+.ac-secondary{background:#121827;border:1px solid #293147;border-radius:14px;
+ color:#99a9c7;font-size:.81rem;padding:13px 16px;margin:15px 0 11px;}
+.ac-foot{color:#8498b8;line-height:1.55;font-size:.78rem;margin:13px 0;}
+@media(max-width:650px){.ac-hero{padding:22px 19px 21px;border-radius:17px}
+ .ac-grid{grid-template-columns:1fr}.ac-source{padding:19px}.block-container{padding-top:.5rem}}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
-<div class="ac-hero">
-  <div class="ac-eyebrow">Forensic sound explorer</div>
-  <div class="ac-title">AudioCheck</div>
-  <div class="ac-subtitle">Where did this recording come from? Examine vinyl, tape,
-  radio, electrical hum and more with simple evidence-based clues.</div>
-  <span class="ac-pill">Up to 5 minutes</span>
-  <span class="ac-pill">MP3 / WAV / FLAC / M4A</span>
-  <span class="ac-pill">Experimental science</span>
-</div>
+<section class="ac-hero">
+  <div class="ac-eyebrow">Sound archaeology lab</div>
+  <div class="ac-title">Audio<b>Check</b></div>
+  <div class="ac-sub">Trace the clues hiding inside a recording: disc surface noise,
+    vinyl rotation, electrical interference, broadcast signals and more.</div>
+  <div class="ac-tags">
+    <span class="ac-tag">Up to 5 minutes</span>
+    <span class="ac-tag">Audio forensic clues</span>
+    <span class="ac-tag">No account required</span>
+  </div>
+</section>
 """, unsafe_allow_html=True)
-
-st.markdown('<div class="ac-section">Choose your audio</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="ac-help">Select a file and press the separate analyze button, '
-    'or try a YouTube video link.</div>', unsafe_allow_html=True
-)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -81,149 +98,190 @@ if "report_error" not in st.session_state:
     st.session_state.report_error = None
 
 
-def store_report(rows, meta, source_name, source_kind):
-    st.session_state.report = {
-        "rows": rows,
-        "meta": meta,
-        "name": source_name,
-        "kind": source_kind,
-    }
+def store_report(rows, meta, name, kind):
+    st.session_state.report = {"rows": rows, "meta": meta, "name": name, "kind": kind}
     st.session_state.report_error = None
 
 
-upload_tab, youtube_tab = st.tabs(["Upload an audio file", "YouTube link (beta)"])
-
+st.markdown('<div class="ac-heading">Analyze a recording</div>', unsafe_allow_html=True)
+st.markdown('<div class="ac-help">Pick a song and press Analyze. You can use MP3, WAV, FLAC, OGG or M4A. Files are analyzed temporarily, without saving them to the repository.</div>', unsafe_allow_html=True)
+upload_tab, youtube_tab = st.tabs(["Upload a song", "YouTube URL (beta)"])
 with upload_tab:
-    st.caption("Choose your recording first. Analysis starts only when you press the button.")
-    with st.form("audio_upload_submit", clear_on_submit=False, enter_to_submit=False):
-        uploaded = st.file_uploader(
-            "Choose MP3, WAV, FLAC, OGG or M4A",
-            type=["mp3", "wav", "flac", "ogg", "m4a"],
-            accept_multiple_files=False,
-            max_upload_size=100,
-        )
-        submitted_upload = st.form_submit_button(
-            "Analyze recording", type="primary", use_container_width=True
-        )
-    if submitted_upload:
+    with st.form("upload_form", clear_on_submit=False, enter_to_submit=False):
+        uploaded = st.file_uploader("Select your audio file", type=["mp3", "wav", "flac", "ogg", "m4a"],
+                                    accept_multiple_files=False, max_upload_size=100)
+        pressed = st.form_submit_button("Analyze recording", use_container_width=True, type="primary")
+    if pressed:
         st.session_state.report = None
-        st.session_state.report_error = None
         if uploaded is None:
-            st.session_state.report_error = (
-                "No audio file reached AudioCheck. Please select the file again, "
-                "then press Analyze recording."
-            )
+            st.session_state.report_error = ("Your browser has not sent a file. "
+                                             "Please select the song again, then press Analyze.")
         elif uploaded.size > MAX_BYTES:
-            st.session_state.report_error = "The maximum upload size is 100 MB."
+            st.session_state.report_error = "The file must be 100 MB or smaller."
         else:
             try:
-                with st.spinner("Examining the recording's audio fingerprints..."):
-                    safe_name = Path(uploaded.name).name
-                    rows, meta = analyze(uploaded.getvalue(), safe_name)
-                store_report(rows, meta, safe_name, "Uploaded file")
-            except ValueError as exc:
-                st.session_state.report_error = str(exc)
+                with st.spinner("Listening for disc, electrical and broadcast fingerprints..."):
+                    name = Path(uploaded.name).name
+                    rows, meta = analyze(uploaded.getvalue(), name)
+                store_report(rows, meta, name, "Uploaded audio")
+            except ValueError as ex:
+                st.session_state.report_error = str(ex)
             except Exception:
-                st.session_state.report_error = "Analysis failed. See the Streamlit Cloud logs for details."
-
+                st.session_state.report_error = "Analysis failed; check Manage app > Logs for details."
 with youtube_tab:
-    st.caption(
-        "For a public video up to 5 minutes long. YouTube can block automatic "
-        "audio retrieval from cloud servers; direct uploads are more reliable."
-    )
-    with st.form("youtube_submit", clear_on_submit=False, enter_to_submit=False):
-        yt_url = st.text_input(
-            "YouTube video URL", placeholder="https://www.youtube.com/watch?v=..."
-        )
-        permitted = st.checkbox(
-            "I have permission to download and analyze this video's audio."
-        )
-        submitted_youtube = st.form_submit_button(
-            "Analyze YouTube audio", type="primary", use_container_width=True
-        )
-    if submitted_youtube:
+    st.caption("Public video, five minutes maximum. YouTube can block automated downloads from Streamlit Cloud.")
+    with st.form("youtube_form", clear_on_submit=False, enter_to_submit=False):
+        link = st.text_input("Paste a YouTube video link", placeholder="https://www.youtube.com/watch?v=...")
+        permitted = st.checkbox("I am authorized to download and analyze this video's audio.")
+        pressed_yt = st.form_submit_button("Analyze YouTube audio", use_container_width=True, type="primary")
+    if pressed_yt:
         st.session_state.report = None
-        st.session_state.report_error = None
-        if not yt_url.strip():
-            st.session_state.report_error = "Paste a YouTube video link first."
+        if not link.strip():
+            st.session_state.report_error = "Enter a YouTube video link."
         elif not permitted:
-            st.session_state.report_error = (
-                "Confirm that you are authorized to download and analyze this audio."
-            )
+            st.session_state.report_error = "Please confirm that downloading this audio is permitted."
         else:
             try:
-                with st.spinner("Retrieving the permitted audio and checking its fingerprints..."):
-                    with tempfile.TemporaryDirectory(prefix="audiocheck_youtube_") as folder:
-                        path, title = download_youtube_audio(yt_url, Path(folder))
-                        rows, meta = analyze_path(path, path.name)
+                with st.spinner("Requesting the audio stream from YouTube..."):
+                    with tempfile.TemporaryDirectory(prefix="audiocheck_yt_") as directory:
+                        path, title = download_youtube_audio(link, Path(directory))
+                        rows, meta = analyze_path(path, title)
                 store_report(rows, meta, title, "YouTube audio")
-            except ValueError as exc:
-                st.session_state.report_error = str(exc)
+            except ValueError as ex:
+                st.session_state.report_error = str(ex)
             except Exception:
-                st.session_state.report_error = (
-                    "YouTube audio couldn't be analyzed. "
-                    "This may be a Streamlit Cloud or YouTube restriction; try uploading a file."
-                )
+                st.session_state.report_error = ("The YouTube service could not return a usable audio file. "
+                                                 "Try uploading a copy you may lawfully use.")
 
 if st.session_state.report_error:
     st.error(st.session_state.report_error)
+
+
+def meaningful(label, item):
+    status = item["certainty"]
+    result = str(item["result"]).lower()
+    if status not in {"Strong", "High", "Possible", "Tentative"}:
+        return False
+    if "candidates" in result or "unclear" in result or "none detected" in result:
+        return False
+    return True
+
+
+def badge_class(item):
+    return {"Strong": "good", "High": "good", "Possible": "possible",
+            "Tentative": "weak"}.get(item["certainty"], "weak")
+
+
+def render_card(label, item):
+    cls = badge_class(item)
+    return (f'<section class="ac-card {cls}">'
+            f'<div class="ac-label">{html.escape(str(label))}</div>'
+            f'<div class="ac-result">{html.escape(str(item["result"]))}</div>'
+            f'<span class="ac-badge {cls}">{html.escape(str(item["certainty"]))}</span>'
+            f'<details><summary>Why this finding?</summary>'
+            f'<p>{html.escape(str(item["detail"]))}</p></details></section>')
+
+
+def plain_english(rows):
+    found = dict(rows)
+    messages = []
+    source = found.get("Likely audio source", {})
+    label = source.get("result", "")
+    if "Disc" in label:
+        messages.append("The sound carries artifacts consistent with a physical record being played. "
+                        "Irregular pops and granular noise can be preserved even when that record was later copied to tape or digitized.")
+    elif "FM" in label:
+        messages.append("A radio-associated signal suggests the audio may have passed through an FM broadcast chain.")
+    elif "Tape" in label:
+        messages.append("Several abrupt level losses could be compatible with magnetic tape, "
+                        "although digital faults can cause similar interruptions.")
+    else:
+        messages.append("This excerpt does not contain enough distinctive artifacts to identify the source confidently.")
+    rotation = found.get("Vinyl rotation", {})
+    if meaningful("Vinyl rotation", rotation):
+        messages.append("Some clicks repeat at a rate matching "
+                        + str(rotation.get("result")) + ", giving a possible disc speed.")
+    electrical = found.get("Likely power system", {})
+    if meaningful("Likely power system", electrical):
+        if "50 Hz" in electrical["result"]:
+            messages.append("A 50 Hz-related hum pattern is present, commonly associated with European and other 50 Hz electrical systems. "
+                            "The interference could have entered during a later transfer.")
+        elif "60 Hz" in electrical["result"]:
+            messages.append("A 60 Hz-related hum pattern is present, consistent with North American and other 60 Hz electrical systems. "
+                            "It does not establish the studio's location.")
+    broadcast = found.get("Radio / TV signals", {})
+    if meaningful("Radio / TV signals", broadcast):
+        messages.append("A narrow tone consistent with " + broadcast["result"]
+                        + " appears in the recording. It could have entered at a later copying stage.")
+    return " ".join(messages)
+
 
 report = st.session_state.report
 if report:
     rows = report["rows"]
     meta = report["meta"]
     diag = meta["diagnostics"]
-    name = html.escape(str(report["name"]))
-    kind = html.escape(str(report["kind"]))
-    st.markdown('<div class="ac-section">Your audio fingerprint</div>', unsafe_allow_html=True)
+    found = dict(rows)
+    st.markdown('<div class="ac-heading">Your audio fingerprint</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="ac-summary"><b>' + name + '</b><br>'
-        + kind + ' &nbsp; &middot; &nbsp; '
-        + f'{meta["duration"]:.1f}s long &nbsp; &middot; &nbsp; '
-        + f'{meta["analyzed_seconds"]:.1f}s examined in '
-        + f'{diag["sampled_sections"]} sections</div>', unsafe_allow_html=True
+        '<div class="ac-meta"><strong>' + html.escape(str(report["name"])) + '</strong>'
+        + html.escape(str(report["kind"])) + f' &middot; {meta["duration"]:.0f}s long'
+        + f' &middot; {meta["analyzed_seconds"]:.0f}s examined in '
+        + f'{diag["sampled_sections"]} sections</div>', unsafe_allow_html=True,
     )
-    cards = []
-    for label, item in rows:
-        status = str(item["certainty"])
-        color = (
-            "ac-strong" if status == "High"
-            else "ac-maybe" if status in {"Possible", "Tentative"}
-            else "ac-muted"
+    source = found.get("Likely audio source")
+    if source and meaningful("Likely audio source", source):
+        st.markdown(
+            '<section class="ac-source"><div class="ac-eyepill">Most likely source</div>'
+            + '<div class="ac-source-title">' + html.escape(source["result"]) + '</div>'
+            + '<div class="ac-source-reason">' + html.escape(source["detail"]) + '</div></section>',
+            unsafe_allow_html=True,
         )
-        title = html.escape(str(label))
-        value = html.escape(str(item["result"]))
-        detail = html.escape(str(item["detail"]))
-        cards.append(
-            f'<article class="ac-card {color}">'
-            f'<div class="ac-label">{title}</div>'
-            f'<div class="ac-value">{value}</div>'
-            f'<span class="ac-badge {color}">{html.escape(status)}</span>'
-            f'<details><summary>Why this result?</summary><p>{detail}</p></details>'
-            f'</article>'
-        )
-    st.markdown('<div class="ac-grid">' + ''.join(cards) + '</div>', unsafe_allow_html=True)
-    with st.expander("More technical details (beta)"):
-        st.write(f"Codec: {meta['codec']}")
+    st.markdown('<section class="ac-main-copy"><h4>What the evidence suggests</h4><p>'
+                + html.escape(plain_english(rows)) + '</p></section>', unsafe_allow_html=True)
+
+    # Prioritize meaningful provenance tests. Don't lead with stereo or bandwidth,
+    # which are easy to measure but do not establish country/medium.
+    preferred = ["Disc surface noise", "Vinyl rotation", "Likely power system",
+                 "Radio / TV signals", "Possible tape dropouts"]
+    show = [(label, found[label]) for label in preferred if label in found
+            and meaningful(label, found[label])]
+    if show:
+        st.markdown('<div class="ac-heading">Signals we found</div>', unsafe_allow_html=True)
+        st.markdown('<div class="ac-grid">' + ''.join(render_card(*item) for item in show)
+                    + '</div>', unsafe_allow_html=True)
+
+    tech = [(label, found[label]) for label in ("Stereo format", "Audio bandwidth")
+            if label in found and meaningful(label, found[label])]
+    if tech:
+        st.markdown('<div class="ac-heading">Audio profile</div>', unsafe_allow_html=True)
+        st.markdown('<div class="ac-grid">' + ''.join(render_card(*item) for item in tech)
+                    + '</div>', unsafe_allow_html=True)
+
+    # Everything uncertain, absent, or overlapping is still accessible, but not
+    # given the same visual emphasis as genuine measured findings.
+    deferred = [(label, item) for label, item in rows
+                if label not in {"Likely audio source", "Recording-medium clues"}
+                and label not in {r[0] for r in show+tech}]
+    if deferred:
+        with st.expander(f"Other checks: {len(deferred)} inconclusive or negative findings"):
+            for label, item in deferred:
+                st.markdown(f"**{label}:** {item['result']}")
+                st.caption(item["detail"])
+    with st.expander("Technical measurements (beta)"):
+        st.write(f"File codec: {meta['codec']}")
         st.write(f"Input sample rate: {meta['input_rate']:,} Hz")
-        st.write(f"Audio channels: {meta['channels']}")
+        st.write(f"Channels: {meta['channels']}")
         st.write(f"Near-full-scale samples: {diag['near_full_scale_percent']}%")
-        st.write(f"Possible brief interruptions: {diag['possible_interruptions']}")
-        st.write(f"Upper spectral energy: {diag['spectral_upper_energy_khz']} kHz")
+        st.write(f"Possible interruptions: {diag['possible_interruptions']}")
         if diag["pilot_frequency_scatter_hz"] is not None:
-            st.write(f"19 kHz pilot variation: {diag['pilot_frequency_scatter_hz']} Hz")
-    st.markdown(
-        '<div class="ac-note"><b>Interpreting the findings:</b> Strong signals are not '
-        'proof of an original recording location. Noise or hum can come from copying '
-        'and digitization. "None detected" means the specific signal was not found '
-        'in the examined sections, not that the medium was definitely absent.</div>',
-        unsafe_allow_html=True,
-    )
+            st.write(f"FM pilot frequency scatter: {diag['pilot_frequency_scatter_hz']} Hz")
+    st.markdown('<div class="ac-foot">These are evidence-based suggestions, not verified '
+                'probabilities. A disc transferred to tape or radio may retain clues from '
+                'multiple stages. This tool cannot identify the song itself.</div>',
+                unsafe_allow_html=True)
 else:
-    st.markdown(
-        '<div class="ac-note">AudioCheck does not identify song titles or artists. '
-        'Audio is processed temporarily; do not submit sensitive or unreleased recordings '
-        'without accepting the hosting provider\'s privacy terms. YouTube downloads '
-        'must be authorized under applicable platform terms and rights.</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="ac-foot">Results prioritize signals we can measure. '
+                'Missing or uncertain signatures are summarized separately. '
+                'Audio uploads are processed temporarily; YouTube availability depends on '
+                'provider access and authorization.</div>', unsafe_allow_html=True)
