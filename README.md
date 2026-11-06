@@ -1,38 +1,69 @@
-# AudioCheck v0.5 - Alternate uploader + measurable evidence
+# AudioCheck v0.7 — Streamlit: submit button + YouTube URL (beta)
 
-Streamlit application for MP3, WAV, FLAC, OGG and M4A recordings up to **5 minutes** and **100 MB**. The server automatically analyzes up to four sections across the song (up to about 160 seconds total).
+This release **stays on Streamlit**. It is not the separate Render/FastAPI edition.
 
-## New: alternative mobile upload method
+## Install/update on your existing site
 
-AudioCheck now defaults to a custom browser file picker using JavaScript FileReader and Streamlit component communication, **rather than** the native Streamlit file uploader's upload endpoint. This alternative supports **25 MB files** (sufficient for nearly all five-minute MP3s) to protect phone/browser memory. Use **Standard upload** for WAV/FLAC files up to **100 MB**. Audio bytes are sent only to the current Streamlit app, not to a third-party upload host.
+1. Extract this ZIP; open your GitHub repository `audiocheck`.
+2. Upload these **five files** to the repository root, replacing old versions:
+   `app.py`, `analyzer.py`, `youtube_source.py`, `requirements.txt`, `packages.txt`.
+   `README.md` may also be replaced. GitHub should show these files at the same level.
+3. Commit changes on `main`; keep Streamlit's entrypoint as **`app.py`**.
+4. Streamlit Community Cloud should redeploy and retain your existing URL.
+5. Open the app directly in Chrome, select a file, and press **Analyze recording**.
+   Or choose the YouTube tab, enter a permitted URL and press its submit button.
 
-This alternate method may avoid some `st.file_uploader` mobile/connection bugs, but it still depends on Android successfully returning a file to the browser and on the web connection. It has not been verified on every Android device. A green `File received` line is the confirmation.
+Older files like `alt_uploader.py`, `main.py`, `Dockerfile`, and `render.yaml` may remain
+in GitHub but are **not used by the Streamlit app**. Do **not** upload the ZIP itself.
 
-## Results
+## Upload method
 
-- **No distinctive signature / None detected** means the specific test found no qualifying signal, **not** that the recording was certainly not vinyl/cassette/radio.
-- **Possible** means a signal passed an engineering threshold, not a calibrated probability.
-- **Not measurable** is used for playback speed without a trusted reference, or frequencies outside the audio sample rate.
-- Vinyl speed, 50/60 Hz power signatures, and FM/TV tones use the previously validated synthetic test methods.
-- **Possible tape dropouts** and **upper audio energy** replace the speculative number of copy generations. Neither establishes whether a cassette was used.
-- A record copied onto tape or broadcast on FM can retain signatures of multiple stages.
+The file uploader is now inside `st.form()` with a dedicated submit button.
+Changing/selecting a file does not automatically trigger the Python analysis.
+This is Streamlit's supported upload flow and avoids the previous custom upload
+component, but **cannot repair** failures inside Android's file picker or an
+unstable mobile/Streamlit connection. Streamlit must still receive the file.
 
-## Deploy to GitHub + Streamlit Community Cloud
+- Formats: MP3, WAV, FLAC, OGG, M4A; max 100 MB / 5 minutes.
+- Analyses up to four distributed nonoverlapping 25-second portions for speed.
+- Results include a coloured signal summary and expandable explanations.
 
-1. Unzip and upload files to the **root** of the repository named `audiocheck`, replacing existing ones.
-2. Commit changes to `main`; the deployed https://audiocheckq.streamlit.app/ app should update automatically.
-3. The required `requirements.txt` installs Streamlit 1.60+, supporting custom components v2. `packages.txt` installs FFmpeg.
-4. No additional upload hosting, API keys, or account setup is required.
-5. Choose **Alternate phone-friendly upload** (default), select an MP3 and confirm green `File received` before pressing **Analyze recording**.
+## YouTube URLs (experimental)
 
-## Important limits
+The app accepts a single standard YouTube video URL (watch/shorts/live page or
+youtu.be link) and downloads its audio using yt-dlp **only when permitted**.
+It rejects playlists, videos longer than five minutes, and arbitrary websites.
+It does not access private videos, cookies, logged-in sessions, DRM, or paywalls.
 
-- The backup uploader transfers base64 over the app connection, raising memory usage by roughly one third or more; it is capped at 25 MB. Native upload remains available for bigger files.
-- Source classification cannot reliably identify cassette from normal hiss/cutoff alone; don't assign a cassette result without new validation data.
-- Musical percussion can mimic vinyl rotation, musical bass lines can mimic power harmonics, and synthesizers can produce stable high-frequency tones. The application does not claim calibrated confidence or original geographic provenance.
-- Absence of pilot tone does **not** exclude FM: analog or MP3 low-pass filtering may remove it.
-- Full Android mobile upload and Streamlit Cloud deployment are not covered by unit tests. Test the deployed app and report any problem.
+**Important:** YouTube's Terms of Service restrict downloading without proper
+authorization. The feature should only be used when downloading is expressly
+permitted by YouTube and applicable rightsholders. Merely being publicly visible
+or labelled Creative Commons does not automatically override YouTube's terms.
 
-## Run unit tests
+YouTube frequently changes its access controls. yt-dlp now recommends an
+external JavaScript runtime (Deno/Node 22+) and the `yt-dlp-ejs` component.
+The Python dependency `yt-dlp[default]` includes the solver component, but
+Streamlit Community Cloud may not have a supported JavaScript runtime.
+YouTube may also reject requests from cloud servers. The YouTube tab should
+therefore be treated as **best-effort beta**; **file uploads remain preferred**.
+Failure to fetch YouTube audio is not an audio-analysis result.
 
-`python -m unittest discover -s tests -v`
+## Technical notes
+
+Uses the enhanced v0.6 analyzer from AudioCheck: up to 5 minutes, 50/60 Hz
+multi-harmonic detection, 33 1/3 / 45 / 78 RPM click periodicity, FM/TV tone
+screening, stereo analysis, dropout hints and measured bandwidth.
+YouTube audio often uses lossy compression which may remove high frequencies,
+FM pilot remnants, electrical hum and clicks, reducing sensitivity.
+
+The server downloads/decodes temporary audio and deletes it after analysis.
+To validate detection with reference recordings, use `tests/test_analyzer.py`
+and the v0.6 public-reference test workflow if already installed.
+
+## Troubleshooting
+
+- `No audio file reached AudioCheck`: select again; try Chrome or a computer.
+- YouTube inaccessible: paste a direct file upload instead; YouTube may refuse
+  automated server-side audio retrieval.
+- Install failures: check Streamlit's **Manage app → Logs**.
+- Python 3.12 is recommended on Streamlit Cloud; `pydub` is not used.
