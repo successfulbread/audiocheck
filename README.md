@@ -47,3 +47,7 @@ Optional beta diagnostics show input codec, sample rate, near-full-scale samples
 `python -m unittest discover -s tests -v`
 
 The included synthetic tests cover known noise, musical beat patterns, intentional groove clicks, mains harmonics, broadcast pilot tones, negative controls and the duration limits. They are not substitutes for a large labeled corpus of authentic disc, cassette and FM transfers.
+
+## Upload reliability update
+
+The upload page shows an explicit **File received** confirmation and no longer automatically embeds the entire recording as a browser audio player. A **Clear selection / try another file** button resets the uploader without restarting the whole site. Analyze is only offered once the file appears successfully in Streamlit. Some Android file-picker failures occur *before* the browser uploads anything; server-side code cannot fully repair those, so try another browser/file picker or refreshing the tab if the selected file never appears. The 5-minute and 100 MB limits are unchanged.
