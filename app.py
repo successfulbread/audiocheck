@@ -1,4 +1,4 @@
-"""AudioCheck v1.1 - bright, simple, sorted results and a clearing upload form."""
+"""AudioCheck v1.2 - unified origin clue, encoding date, and clear upload flow."""
 from __future__ import annotations
 
 import html
@@ -43,12 +43,16 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-card.good .ac-pill{background:#BADFFF;color:#164F94;}
 .ac-card.maybe .ac-pill{background:#FFE0A8;color:#81500A;}
 .ac-card.none .ac-pill{background:#E2E5EB;color:#697481;}
+.ac-sub{font-size:.78rem;font-weight:650;color:#4B647F;margin-top:7px;}
 .ac-result{font-size:1.15rem;line-height:1.3;font-weight:850;color:#17385A;overflow-wrap:anywhere;min-height:1.45em;}
 .ac-card.none .ac-result{font-size:1rem;color:#697785;}
+.ac-card.none .ac-sub{color:#788592;}
 .ac-card details{border-top:1px solid #AFC9D533;margin-top:12px;padding-top:8px;}
 .ac-card summary{font-size:.78rem;font-weight:800;color:#246193;cursor:pointer;}
 .ac-card.none summary{color:#6D7C8B;}
 .ac-card details p{font-size:.82rem;line-height:1.47;color:#435A71;margin:8px 0 2px;}
+.ac-card details ul{margin:9px 0 0;padding-left:19px;}
+.ac-card details li{font-size:.82rem;line-height:1.43;color:#435A71;margin:5px 0;}
 .ac-card.none details p{color:#6D7B88;}
 .ac-foot{font-size:.76rem;color:#6A7D91;margin-top:13px;}
 @media(max-width:675px){.ac-grid{grid-template-columns:1fr;gap:10px;}
@@ -58,7 +62,7 @@ header[data-testid="stHeader"] {background:transparent;}
 """, unsafe_allow_html=True)
 
 st.markdown('''<div class="ac-hero"><div class="ac-brand">Audio<span>Check</span></div>
-<p class="ac-intro">Old records. Lost songs. Hidden audio clues.</p></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Upload a song to check its likely source, record speed, broadcast signals and digital file age.</p></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -98,16 +102,14 @@ def badge_class(item):
 
 
 LABELS = {
-    "Likely audio source": ("Likely source", "&#9835;"),
+    "Likely audio source": ("Likely origin", "&#9835;"),
     "Vinyl rotation": ("Record speed", "&#9673;"),
     "Likely power system": ("Power region", "&#9889;"),
     "Radio / TV signals": ("Radio / TV signal", "&#9737;"),
     "NDR-style 10 kHz dip": ("NDR 10 kHz dip", "&#9836;"),
-    "Disc surface noise": ("Disc crackle", "&#9678;"),
-    "Possible tape dropouts": ("Tape dropouts", "&#9646;"),
     "Stereo format": ("Stereo / mono", "&#8644;"),
-    "Audio bandwidth": ("Audio range & origin", "&#8767;"),
-    "Digital file history": ("Digital file history", "&#128197;"),
+    "Audio bandwidth": ("Frequency fingerprint", "&#8767;"),
+    "Digital file history": ("Digital file age", "&#128197;"),
     "Playback speed": ("Playback speed", "&#8635;"),
 }
 
@@ -133,14 +135,7 @@ def display_result(key, item):
             return raw
         return "Unclear"
     if key == "Likely audio source":
-        if "record" in raw.lower() or "vinyl" in raw.lower():
-            return "Likely Vinyl / Record"
-        if "cassette" in raw.lower() or "tape" in raw.lower():
-            return "Likely Cassette / Tape"
-        if "fm radio" in raw.lower():
-            return "Likely FM Radio"
-        if "tv" in raw.lower():
-            return "Possible TV Recording"
+        return raw
     if key == "Vinyl rotation":
         m = re.search(r"(?:Likely|Possible) (.+? RPM)", raw)
         return m.group(1) if m else raw
@@ -171,7 +166,7 @@ def display_result(key, item):
 def why(key, item):
     if not meaningful(item):
         return {
-            "Likely audio source": "No clear record, tape or radio signature stood out.",
+            "Likely audio source": "No distinctive record, tape or FM signal stood out. Clean recordings can sound alike.",
             "Vinyl rotation": "No repeating pops reliably matched 33 1/3, 45 or 78 RPM.",
             "Likely power system": "No steady 50 or 60 Hz electrical hum stood out.",
             "Radio / TV signals": "No convincing old TV scan tone or FM pilot tone was found.",
@@ -186,14 +181,7 @@ def why(key, item):
     detail = str(item.get("detail", ""))
     raw = str(item.get("result", ""))
     if key == "Likely audio source":
-        if "record" in raw.lower() or "vinyl" in raw.lower():
-            return "Repeated short pops or crackle suggest a record transfer. Some sounds may be from an earlier copy."
-        if "cassette" in raw.lower() or "tape" in raw.lower():
-            return "Short sound dropouts suggest tape wear. Digital glitches can sound similar."
-        if "fm radio" in raw.lower():
-            return "A steady 19 kHz tone fits an FM radio recording."
-        if "TV" in raw:
-            return "A steady old TV scan tone appears in the audio. It may be from a later transfer."
+        return detail[:350] if detail else "Source guess uses clicks, crackle, dropouts and radio tones."
     if key == "Vinyl rotation":
         match = re.search(r"(\d+) (?:short|quick) click", detail)
         count = f"{match.group(1)} sharp pops" if match else "Sharp pops"
@@ -240,12 +228,37 @@ def card(label, item, key=None):
     icon = LABELS.get(key, (label, "&#9835;"))[1]
     value = display_result(key, item)
     description = why(key, item)
+    sub = ""
+    details_html = f'<p>{html.escape(description)}</p>'
+    if key == "Likely audio source" and meaningful(item):
+        pct = item.get("guess_percent")
+        if isinstance(pct, (int, float)) and 0 < pct < 100:
+            sub = f'<div class="ac-sub">~{int(pct)}% rough clue score</div>'
+        evidence = item.get("evidence", [])
+        if isinstance(evidence, list) and evidence:
+            facts = [html.escape(str(x)) for x in evidence if x]
+            details_html = '<ul>' + ''.join(f'<li>{fact}</li>' for fact in facts[:6]) + '</ul>'
+    elif key == "Digital file history":
+        facts = item.get("facts", {}) if isinstance(item.get("facts"), dict) else {}
+        fmt = str(facts.get("codec") or "").upper()
+        enc = str(facts.get("encoder") or "")
+        bitrate = facts.get("bitrate_kbps")
+        mode = str(facts.get("bitrate_mode") or "")
+        bits = [fmt] if fmt else []
+        if bitrate:
+            bits.append(f'{bitrate} kbps')
+        if mode:
+            bits.append(mode)
+        if enc:
+            bits.append(enc[:38])
+        if bits:
+            sub = f'<div class="ac-sub">{html.escape(" · ".join(bits))}</div>'
     return (f'<section class="ac-card {cls}">'
             f'<div class="ac-top"><span class="ac-icon">{icon}</span>'
             f'<span class="ac-label">{html.escape(label)}</span>'
             f'<span class="ac-pill">{pill}</span></div>'
-            f'<div class="ac-result">{html.escape(value)}</div>'
-            f'<details><summary>Why?</summary><p>{html.escape(description)}</p></details>'
+            f'<div class="ac-result">{html.escape(value)}</div>{sub}'
+            f'<details><summary>Why?</summary>{details_html}</details>'
             f'</section>')
 
 

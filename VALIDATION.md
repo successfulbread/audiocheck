@@ -1,14 +1,14 @@
-# AudioCheck v1.1 — Validation and limits
+# AudioCheck v1.2 - Validation
 
-- Automated Python regression tests: **69 passed** (including metadata checks and audio-frequency tests).
-- User-provided historical ragtime MP3: ID3 software tag names **LAME 3.99.5**; AudioCheck reports **Encoded 2012 or later**. The record itself is much older; the tag describes a digital encoding.
-- User-provided EKT MPEG audio: encoder tag **Lavc57.10**, approximately 90 kbps VBR; broad-spectrum check found a **sharp high-frequency cutoff ~16 kHz**, consistent with MP3 filtering. A broadcast scan line can coexist with codec filtering.
-- Synthetic test: gradual low-pass filter around 15 kHz is classified as limited/filtered bandwidth, without claiming it must be radio.
-- Synthetic test: full-band noise remains wide-band. Noise at high frequencies (including record hiss/crackle) does *not* demonstrate that music was recorded digitally.
-- Synthetic test: reduced original sample rate is correctly called out as a sampling-rate limit.
-- Synthetic metadata tests: encoded-date tag is recognized, a song's recording-year tag is not confused with file creation, and contradictory encoding years are flagged.
-- All existing vinyl, power-hum, broadcast, NDR, stereo, failure-handling, sorting and uploaded-file reset tests are retained.
+- Regression suite: 79 local tests passed (run `PYTHONPATH=. pytest -q`).
+- Historical user-provided 'Hysterics Rag' MP3: **Likely Vinyl / Record** (High; about 81% relative clue score) based on irregular record crackle, quieter-section noise, and a weaker possible 45 RPM click pattern. The MP3's LAME 3.99.5 tag supports **encoded 2012 or later**.
+- User-provided EKT MPEG audio: strong **NTSC-type TV scan-line interference** is retained, and digital-file metadata now shows **encoded 2015 or later** from `Lavc57.10`. The original medium is **not established** by either the scan tone or MP3 codec.
+- Source-combination tests cover clear disc evidence, FM 19 kHz pilot, tape-like short dropouts, wide but clean audio, TV interference without a source conclusion, and no-evidence controls.
+- Display tests cover escaping untrusted text, sorted/grey cards, combined crackle/dropout clues, age + codec subtitling, and evidence details in the Why? dropdown.
+- The app still clears the selected file after successful analysis without discarding the report.
 
-**Not established:** A spectral cutoff cannot uniquely distinguish FM, cassette, or MP3; the LAME release date gives only a possible *lower bound* for encoding. Encoder and creation tags can be edited, and some programs or transfers overwrite them. Original creation dates of YouTube videos are not recoverable from their transcoded audio streams. File-system timestamps on temporary uploads are intentionally ignored.
+**Limitations:** Source scores are rough heuristic weights, not measured probabilities. Even a convincing vinyl fingerprint may have been copied to cassette, radio, or MP3. The file creation date cannot be established from bitrate alone. Release-year tags must not be mistaken for encode dates. The live website and all Android browsers have not been individually tested with this build.
 
-The complete Streamlit browser interface still requires confirmation on the live deployment. Automated tests exercise the analysis and display helper logic, not real Streamlit Cloud browser sessions.
+Encoder-date reference points:
+- LAME 3.99.5 was released February 28, 2012: https://github.com/enzo1982/lame/releases
+- FFmpeg `libavcodec` major version 57 was introduced in 2015: https://fuchsia.googlesource.com/third_party/ffmpeg/+/n3.3.7/doc/APIchanges

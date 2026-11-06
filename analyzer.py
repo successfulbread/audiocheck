@@ -1,4 +1,4 @@
-"""AudioCheck v1.1: approachable evidence-based recording guesses.
+"""AudioCheck v1.2: combined source inference and measured clues.
 
 Measures evidence, not proof of an original recording medium or location.
 Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
@@ -841,6 +841,111 @@ def _bandwidth_verdict(windows, metadata, broadcast):
         f'Audio/noise energy was measured up to around {cutoff:g} kHz. This alone cannot identify a format.')
 
 
+def _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, meta):
+    """Fun source ranking from *independent* measurable clues.
+
+    Percentages are heuristic shares of evidence weight, NOT estimated odds or
+    calibrated model probabilities. A vinyl disc may have been copied to tape,
+    radio or digital, so these source categories can coexist in reality.
+    """
+    scores = {"Vinyl / Record": 0.35, "Cassette / Tape": 0.35,
+              "FM radio": 0.35, "Digital original": 0.35}
+    added = {name: 0.0 for name in scores}
+    facts = []
+
+    def add(label, points, fact):
+        added[label] += points
+        scores[label] += points
+        facts.append(fact)
+
+    sr = str(surface.get("result", "")).lower()
+    rot = str(rotation.get("result", ""))
+    br = str(broadcast.get("result", ""))
+    bw = str(bandwidth.get("result", ""))
+    disc_weight = {"High": 6.5, "Strong": 6.5, "Possible": 3.7, "Tentative": 1.7}
+    if "crackle" in sr and surface.get("certainty") in disc_weight:
+        n = disc_weight[surface["certainty"]]
+        add("Vinyl / Record", n,
+            "Irregular pops and crackle were heard, including between musical sounds. "
+            "That fits a record transfer (vinyl or older shellac).")
+    if "rpm" in rot.lower() and rotation.get("certainty") in disc_weight:
+        n = {"High": 5.5, "Strong": 5.5, "Possible": 3.0, "Tentative": 1.2}[rotation["certainty"]]
+        import re
+        rpm_match = re.search(r"(33[\u2153]|45|78)\s*RPM",rot,re.I)
+        label = rpm_match.group(0) if rpm_match else "record rotation"
+        add("Vinyl / Record", n,
+            f"Some clicks repeat at about the timing expected for {label}. "
+            "Music can sometimes imitate repeating clicks.")
+    if "FM radio pilot" in br and broadcast.get("certainty") in disc_weight:
+        weight = {"High": 7.5, "Strong": 7.5, "Possible": 5.0, "Tentative": 2.5}[broadcast["certainty"]]
+        add("FM radio", weight,
+            "A narrow 19 kHz tone matches the FM stereo pilot found in radio broadcasts.")
+    if "NTSC" in br or "PAL" in br or "SECAM" in br:
+        facts.append("A TV scanning tone was detected, but this can enter during a later transfer; "
+                     "it does not tell us whether the source was cassette, record or radio.")
+    if ndr.get("certainty") in ("Possible", "Tentative"):
+        add("FM radio", 0.6,
+            "There is a dip near 10 kHz like some historic NDR radio transfers, "
+            "but other filters can produce this too.")
+    import re
+    m = re.search(r"(\d+)", str(dropout.get("result", "")))
+    drops = int(m.group(1)) if m else 0
+    if drops >= 2:
+        add("Cassette / Tape", min(2.5, 1.0 + 0.22*drops),
+            f"{drops} brief sound dropouts were found. Tape damage is one explanation; "
+            "digital glitches can also cause them.")
+    if "FM-like cutoff" in bw:
+        add("FM radio", 1.2,
+            "The high frequencies cut off near the FM broadcast range. "
+            "Digital compression can cause a similar cutoff.")
+    elif "Limited highs" in bw or "Narrow range" in bw:
+        facts.append("The recording loses high-frequency sound, which can happen with "
+                     "tape, radio, filtering or compressed audio.")
+    elif "MP3-like cutoff" in bw:
+        facts.append("The high-frequency cutoff fits the file's MP3 compression. "
+                     "That does not reveal the original recording medium.")
+    elif "Wide range" in bw:
+        facts.append("Wide frequency range was measured, but record noise can also extend high; "
+                     "this does not prove a digital original.")
+
+    # A clean, wide-band recording *can* have a digital source. This is only a
+    # weak fallback, since well-transferred analog recordings can sound clean.
+    if max(added.values()) < 1.0 and "Wide range" in bw and drops == 0:
+        add("Digital original", 1.4,
+            "No clear disc, tape or FM artifacts stood out, and the frequency range is wide. "
+            "That is compatible with digital audio, but clean analog transfers also fit.")
+
+    if max(added.values()) < 1.0:
+        return {"result": "Source not clear", "certainty": "Not measurable",
+                "detail": "No distinctive record, cassette or FM signal was strong enough for a useful source guess.",
+                "evidence": facts or ["No distinctive source-specific artifact stood out."],
+                "guess_percent": None, "alternative": None}
+
+    winner = max(scores, key=lambda k: scores[k])
+    # A non-calibrated, purely comparative indicator. Keep 0.8 for "unknown".
+    unknown_weight = 0.8
+    pct = round(100 * scores[winner] / (sum(scores.values()) + unknown_weight))
+    if winner == "Vinyl / Record":
+        label = "Likely Vinyl / Record"
+    elif winner == "Cassette / Tape":
+        label = "Likely Cassette / Tape" if added[winner] >= 2.0 else "Possible Cassette / Tape"
+    elif winner == "FM radio":
+        label = "Likely FM Radio" if added[winner] >= 2.4 else "Possible Radio Transfer"
+    else:
+        label = "Possible Digital Source"
+    if winner == "Vinyl / Record" and added[winner] < 2.5:
+        label = "Possible Vinyl / Record"
+    strength = ("High" if added[winner] >= 6.0 and pct >= 64 else
+                "Possible" if added[winner] >= 2.4 else "Tentative")
+    other = sorted(((k,v) for k,v in scores.items() if k != winner), key=lambda kv:kv[1],reverse=True)
+    alternative = other[0][0] if other else None
+    facts.append("These percentages are fun clue rankings, not proven probabilities; "
+                 "a record can also be copied onto cassette or broadcast on radio.")
+    return {"result": label, "certainty": strength,
+            "detail": " ".join(facts), "evidence": facts,
+            "guess_percent": pct, "alternative": alternative}
+
+
 def _diagnostics(windows):
     clips = [w["clipped"] for w in windows]
     cutoffs = [w["cutoff"] for w in windows if w["cutoff"]]
@@ -891,46 +996,15 @@ def analyze_path(path, file_name=None):
     broadcast = _consolidate_broadcast(analyzed)
     ndr = _consolidate_ndr(analyzed)
     diag = _diagnostics(analyzed)
-    fm = 'FM radio pilot' in broadcast['result'] and broadcast['certainty'] in {'High','Possible','Tentative'}
-    ntsc = 'NTSC-type TV' in broadcast['result'] and broadcast['certainty'] in {'High','Possible','Tentative'}
-    disc = rotation['certainty'] in {'High','Possible','Tentative'} or surface['certainty'] in {'High','Possible','Tentative'}
-    surface_hint = surface['certainty'] in ('High','Possible','Tentative')
-    interruptions = diag['possible_interruptions']
-    if disc:
-        prefix = 'Likely Vinyl / Record'
-        reason = ('Irregular high-frequency crackle and pops suggest a physical disc somewhere in the transfer chain. '
-                  if surface_hint else 'Repeated click timings suggest a rotating disc. ')
-        strong_source = surface['certainty'] == 'High' or rotation['certainty'] == 'High'
-        source = verdict(prefix, 'High' if strong_source else 'Possible',
-                         reason + (rotation['detail'] if rotation['certainty'] in {'High','Possible','Tentative'} else surface['detail']))
-    elif fm:
-        source = verdict('Likely FM radio recording','Possible',broadcast['detail'])
-    elif ntsc:
-        source = verdict('Possible TV / monitor recording','Tentative',
-            'A detectable NTSC-type line-frequency tone suggests audio passed near a television or monitor. '
-            'It does not establish where the song was originally recorded.')
-    elif ndr['certainty'] in ('Possible','Tentative'):
-        source = verdict('Possible radio / cassette transfer','Tentative',ndr['detail'])
-    elif interruptions >= 2:
-        source = verdict('Likely Cassette / Tape','Tentative',
-            f'{interruptions} short dropouts were found. Tape wear is one possibility, '
-            'but digital glitches can also cause dropouts.')
-    elif surface_hint:
-        source = verdict('Likely Vinyl / Record','Tentative',surface['detail'])
-    else:
-        source = verdict('Source uncertain','Not measurable',
-            'No distinctive source artifacts were found. A clean record, cassette and digital source can sound similar.')
-    stereo = _stereo_format(analyzed, metadata['channels'])
-    if disc:
-        medium=verdict('Disc transfer clues',source['certainty'],source['detail'])
-    elif fm or ntsc or ndr['certainty'] in ('Possible','Tentative'):
-        medium=verdict('Broadcast or transfer clues','Tentative',broadcast['detail'])
-    else:
-        medium=verdict('No distinctive analog-medium clue','Not measurable','No clear medium-specific signal.')
-    dropout=(verdict(f'{interruptions} brief interruptions','Tentative',
-                    'Sudden short level losses; not unique to magnetic tape.')
-             if interruptions else verdict('None found','Not detected','No brief near-silent interruptions.'))
+    # Source guess combines measured disc/tape/FM/bandwidth clues rather than
+    # duplicating surface crackle and dropouts as primary result cards.
+    interruption_count = diag['possible_interruptions']
+    dropout = (verdict(f'{interruption_count} brief interruptions', 'Tentative',
+                       'Short losses in sound; not specific to tape.')
+               if interruption_count else verdict('None found', 'Not detected', 'No brief interruptions.'))
     bandwidth = _bandwidth_verdict(analyzed, metadata, broadcast)
+    source = _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, metadata)
+    stereo = _stereo_format(analyzed, metadata['channels'])
     rows=[
         ('Likely audio source',source),
         ('Vinyl rotation',rotation),
@@ -938,7 +1012,6 @@ def analyze_path(path, file_name=None):
         ('Radio / TV signals',broadcast),
         ('NDR-style 10 kHz dip',ndr),
         ('Disc surface noise',surface),
-        ('Recording-medium clues',medium),
         ('Possible tape dropouts',dropout),
         ('Playback speed',verdict('No reliable reference','Not measurable',
             'The recording cannot be judged uniformly fast or slow without a trustworthy speed reference.')),

@@ -15,8 +15,7 @@ from mutagen.mp3 import MP3
 # https://github.com/enzo1982/lame/releases and SourceForge's LAME releases.
 LAME_EARLIEST_YEAR = {
     (3, 96): 2004, (3, 97): 2006, (3, 98): 2008,
-    (3, 99): 2011, (3, 100): 2017, (3, 101): 2026,
-    (4, 0): 2026,
+    (3, 99): 2011, (3, 100): 2017,
 }
 
 
@@ -37,6 +36,18 @@ def _year(text):
 def _lame_version(encoder):
     hit = re.search(r"LAME(?:.{0,36}?\bversion\s+|\s*)(\d)\.(\d{2,3})(?:\.(\d+))?", encoder, re.I)
     return tuple(map(int, hit.groups(default="0"))) if hit else None
+
+
+def _lavc_earliest_year(encoder):
+    """A documented lower bound for libavcodec encoder version 57.
+
+    FFmpeg API history puts the major version 57 transition in Aug 2015.
+    Avoid extrapolating unverified major-version release dates.
+    """
+    match = re.search(r"(?:\bLavc|libavcodec)[\s/]*(\d{2})(?:\.\d+)?", encoder or "", re.I)
+    if match and int(match.group(1)) == 57:
+        return 2015
+    return None
 
 
 def inspect_file(path: Path, probe_data: dict):
@@ -95,8 +106,8 @@ def inspect_file(path: Path, probe_data: dict):
     details['encoding_date'] = encoded_date[:100] if encoded_date else None
     details['tagged_year'] = _year(song_date)
     version = _lame_version(encoder)
-    earliest = LAME_EARLIEST_YEAR.get(version[:2]) if version else None
-    # LAME 3.99.5 is 2012, whereas 3.99.0 is 2011.
+    earliest = LAME_EARLIEST_YEAR.get(version[:2]) if version else _lavc_earliest_year(encoder)
+    # LAME 3.99.5 was released February 28, 2012.
     if version and version[:2] == (3, 99) and version[2] >= 5:
         earliest = 2012
     details['earliest_encoder_year'] = earliest
