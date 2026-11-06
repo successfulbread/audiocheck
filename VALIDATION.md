@@ -46,3 +46,18 @@ A 78 RPM original will not necessarily show 78 RPM recurring defects: an undamag
 ## Deployment verification not performed here
 
 Python syntax compilation and local FFmpeg decoding were tested. Streamlit's actual browser interface and Streamlit Community Cloud deployment must still be exercised on the user's live application. The package uses Streamlit 1.53+ for the per-widget upload cap; the Python dependencies are installed on the Cloud host.
+
+## v0.5: alternative upload and negative-result labeling
+
+A separate HTML5 FileReader uploader is provided, transporting base64 file data over Streamlit component state (25 MB max) rather than the native upload endpoint. This is a genuine alternate upload path, but not a proven fix for every Android file-picker fault. Server-side payload size and base64 validity are checked.
+
+Specific negative measurements now show **None detected** rather than generic **Unclear**, and unmeasurable results (for example absolute playback speed) show **Not measurable**. This is a presentation change, not a relaxation of the underlying vinyl, mains or FM threshold. Two previously speculative rows were replaced with measurable beta dropout/bandwidth measurements.
+
+### v0.5 completed checks
+
+- 19 Python unit tests passed, including negative-result labeling and alternate uploader payload validation.
+- Alternate JavaScript uploader passed a standalone Node test using a simulated browser FileReader and component state callback. This is **not** a real Android browser/Streamlit-hosted test.
+- An end-to-end 300-second MP3 test completed, sampling 160 seconds over four windows. With no qualifying vinyl clicks, the integrated source row now correctly returns `No distinctive signature`.
+- Known synthetic 45 RPM test captures processed as WAV and MP3 still both return `45 RPM`.
+- A classification regression was detected and fixed: changing an individual detector to return `None detected` must not be interpreted by a downstream classifier as positive evidence.
+- The full Streamlit UI could not be launched locally in the testing environment because the Streamlit package was not installed and the package index was inaccessible. The user should test the new mobile uploader in the deployed website before claiming upload reliability.

@@ -1,4 +1,4 @@
-"""AudioCheck v0.3: cautious audio provenance indicators.
+"""AudioCheck v0.5: evidence-oriented audio provenance indicators.
 
 Measures evidence, not proof of an original recording medium or location.
 Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
@@ -270,7 +270,7 @@ def _vinyl_window(audio):
 def _consolidate_vinyl(windows):
     hits = [w["vinyl"] for w in windows if w["vinyl"]]
     if not hits:
-        return verdict(detail="No repeatable rotation-locked click sequence cleared the strict checks. Clean vinyl remains possible.")
+        return verdict("None detected", "Not detected", "No repeatable rotation-locked click sequence cleared the detection checks. This does not exclude clean vinyl.")
     rpm_scores = {}
     for h in hits:
         rpm_scores[h["rpm"]] = rpm_scores.get(h["rpm"], 0) + h["score"]
@@ -296,7 +296,7 @@ def _consolidate_electrical(windows):
             scores[base] = (len(hits), sum(min(h["count"], 4) for h in hits),
                             sum(h["snr"] for h in hits))
     if not scores:
-        return verdict(detail="No persistent 50/60 Hz harmonic comb passed the detection gates.")
+        return verdict("None detected", "Not detected", "No sufficiently strong, persistent 50/60 Hz harmonic pattern was detected. This does not establish the absence of electrical interference.")
     ranked = sorted(scores.items(), key=lambda kv: (kv[1][1], kv[1][2]), reverse=True)
     if len(ranked) > 1 and ranked[0][1][1] <= ranked[1][1][1] + 1:
         return verdict(detail="Both 50 Hz and 60 Hz families were plausible; the electrical environment is ambiguous.")
@@ -317,8 +317,10 @@ def _consolidate_broadcast(windows):
         if len(good) >= 2 or (len(windows) == 1 and len(good) == 1 and good[0]["snr"] >= 22):
             matches.append((name, float(np.median([g["snr"] for g in good]))))
     if not matches:
-        return verdict(detail="No persistent FM stereo pilot or TV line-frequency tone. "
-                       "MP3 filtering can erase these high-frequency signals, so absence proves little.")
+        testable = any(value is not None for w in windows for value in w["broadcast"].values())
+        if not testable:
+            return verdict("Not testable", "Not measurable", "The recording sample rate is too low for the FM/TV frequencies checked.")
+        return verdict("None detected", "Not detected", "No qualifying 19 kHz FM pilot or TV line-frequency interference was detected in the tested audio. Lossy encoding and filtering may have removed them.")
     matches.sort(key=lambda e: e[1], reverse=True)
     if len(matches) > 1:
         names_text = ", ".join(name for name, _ in matches)
@@ -451,7 +453,7 @@ def analyze_path(path, file_name=None):
     fm_hits = [x for x in fm_hits if x and x["pass"] and x.get("persistent")]
     fm_accepted = len(fm_hits) >= 2 or (len(analyzed) == 1 and
                                        len(fm_hits) == 1 and fm_hits[0]["snr"] >= 22)
-    vinyl_accepted = rotation["result"] != "Unclear"
+    vinyl_accepted = rotation["certainty"] == "Possible"
     if vinyl_accepted and fm_accepted:
         source = verdict("Vinyl + FM evidence", "Possible",
                          "Both rotation-period defects and an FM stereo pilot were detected; "
@@ -463,24 +465,39 @@ def analyze_path(path, file_name=None):
         source = verdict("FM radio evidence", "Possible",
                          "A 19 kHz pilot remnant suggests FM stereo broadcast somewhere in the transfer chain.")
     else:
-        source = verdict(detail="No specific vinyl or FM evidence. Hiss or limited bandwidth cannot by themselves prove cassette.")
+        source = verdict("No distinctive signature", "Not detected", "Neither a rotation-locked vinyl signature nor an FM stereo pilot passed the tests. Cassette, vinyl and radio all remain possible.")
     stereo = _stereo_format(analyzed, metadata["channels"])
-    recording = (verdict("Analog transfer evidence", "Possible",
-                         "Vinyl-like rotation defects suggest an analog disc at some stage, not necessarily an analog master.")
-                 if rotation["result"] != "Unclear" else
-                 verdict(detail="The original studio medium cannot be identified from the mixed audio and file encoding."))
+    diag = _diagnostics(analyzed)
+    recording = (verdict("Analog disc evidence", "Possible",
+                         "Rotation-locked impulses suggest a disc somewhere in the recording chain, not necessarily the original studio master.")
+                 if vinyl_accepted else
+                 verdict("No distinctive signature", "Not detected",
+                         "The checks did not identify a medium-specific signature. This is not evidence of digital or cassette origin."))
+    interruptions = diag["possible_interruptions"]
+    dropout = (verdict(f"{interruptions} possible interruption(s)", "Possible",
+                       "Brief level dropouts were detected. Musical rests, edits and digital faults can produce similar events; this is not a cassette identification.")
+               if interruptions else
+               verdict("None detected", "Not detected",
+                       "No brief near-silent interruptions qualified in the analyzed portions. This does not exclude tape."))
+    cutoff = diag["spectral_upper_energy_khz"]
+    bandwidth = (verdict(f"Energy up to ~{cutoff:g} kHz", "Possible",
+                         "Approximate highest half-kilohertz band above the analysis noise threshold. Not a verified audio bandwidth cutoff or proof of format.")
+                 if cutoff is not None else
+                 verdict("Not measurable", "Not measurable", "Not enough useful spectrum to estimate upper audio energy."))
     rows = [
         ("Likely source", source),
-        ("Likely vinyl speed", rotation),
-        ("Likely power origin", electrical),
-        ("Likely broadcast signals", broadcast),
-        ("Likely playback speed", verdict(detail="Without a trusted reference tone or reference recording, absolute playback speed cannot be established.")),
-        ("Likely recording medium", recording),
-        ("Likely audio generation", verdict(detail="Hiss, filtering and clipping cannot reliably count tape or digital copying generations.")),
+        ("Vinyl rotation", rotation),
+        ("Power-system signature", electrical),
+        ("Radio / TV signals", broadcast),
+        ("Playback speed", verdict("No speed reference", "Not measurable",
+                                   "Cannot establish absolute playback speed without a calibrated reference tone or comparison recording.")),
+        ("Recording-medium evidence", recording),
+        ("Possible tape dropouts", dropout),
+        ("Upper audio energy", bandwidth),
         ("Stereo format", stereo),
     ]
     metadata["analyzed_seconds"] = round(sum(len(w["audio"]) / SAMPLE_RATE for w in analyzed), 1)
-    metadata["diagnostics"] = _diagnostics(analyzed)
+    metadata["diagnostics"] = diag
     return rows, metadata
 
 
