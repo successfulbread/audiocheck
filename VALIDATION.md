@@ -1,37 +1,29 @@
-# AudioCheck v0.9 — validation notes
+# AudioCheck v1.0 validation
 
-## Tests executed locally
+## Automated checks
 
-- `PYTHONPATH=. pytest -q tests`: **49 passed** (synthetic audio plus no-signal, incorrect-standard and non-periodic-click controls).
-- Syntax compilation: `python -m py_compile analyzer.py app.py` passed.
-- Streamlit itself could not be installed in this isolated build environment, so the hosted app's visual appearance and phone file picker have **not** been run end-to-end. The theme uses the supported Streamlit `.streamlit/config.toml` format.
+58 tests passed in the development container (including synthetic 33 1/3, 45 and 78 RPM clicks; musical-drum false positive controls; real 50/60 Hz-style interference injected into synthetic music; TV/FM tones; NDR notch screening; browser-state upload clearing; result-card sorting; and missing-data resilience).
 
-## Uploaded reference recordings
+## User-provided real audio checks
 
-**Everyone_Knows_That.mp3.mpeg**, supplied by user, 17.3 seconds, MP3 at 44.1 kHz:
+**Tony Parenti's Ragtimers - Hysterics Rag**: 168.3-second MP3; 75 seconds sampled. Results: Likely Vinyl / Record (High); Disc crackle found (High); a weaker 45 RPM click-pattern guess (Tentative); possible 50 Hz interference (Tentative). The original disc's speed was not independently verified. This is not an accuracy claim for the 45 RPM guess.
 
-- TV interference: **Likely NTSC-type TV interference**, with a measured narrow frequency peak around **15,734.3 Hz** (approximately **34 dB** above nearby spectral energy on an averaged spectrum).
-- Power region: **Possible 60 Hz region (North America and others)**, *tentative*; also contained 50 Hz candidates, so no original recording country is asserted. The 60 Hz line was stronger in the initial measurements, but musical tones are an alternative explanation.
-- Source guess: **Possible TV / monitor recording**, because of the TV scan tone; this signal may have entered in a later transfer or from nearby equipment.
-- NDR-style 10 kHz dip: **Not found**.
+**Everyone Knows That (EKT) sample**: 17.3-second MP3/MPEG. Results: a strong NTSC-type television frequency near 15,734 Hz; tentative 60 Hz electrical clue; no clear record-click signature. The 15,734 Hz detection does not prove the original studio's country.
 
-**Hysterics Rag (A Trombone Fit) — Tony Parenti's Ragtimers**, supplied by user, 168.3-second MP3:
+## New UI tests
 
-- Source guess: **Likely record (vinyl/shellac)**, based on short irregular impulses and crackle that persists through quiet passages. This does **not** give a trustworthy RPM.
-- Power region: a **tentative 50 Hz candidate**; not proof of a European recording location.
-- TV/FM tone: no qualifying persistent tone found.
-- NDR-style 10 kHz dip: not found.
+- All ten relevant checks produce cards even if some results are missing.
+- Positive results sort first by measured strength, then grey non-findings.
+- A normal successful file upload increments the file-picker key, clearing the chosen file on rerun while preserving the report.
+- Untrusted filenames/results are HTML escaped.
+- A static responsive layout was rendered for desktop and mobile. Full Streamlit Cloud deployment was not tested here.
 
-## Engineering controls (among the 49 tests)
+## Limits
 
-- Idealized 33⅓, 45 and 78 RPM click trains detected.
-- Seven sparse 45 RPM clicks now produce only a *relaxed/tentative* rotation hit.
-- Regular non-impulsive drums and non-periodic pops do not automatically produce an RPM.
-- Synthetic broadband filtered material with a sharp notch at 10,000 Hz, 10,135 Hz and 10,310 Hz is detected; broadband audio without the notch is not flagged.
-- A TV tone at 15,751 Hz (slightly away from nominal NTSC) is correctly picked up. Broadband music without TV/FM lines returns no broadcast tone.
-- 50 Hz and 60 Hz hum with harmonics survives moderately compressed MP3 and opposite stereo-channel phase. Pure white noise and synth music without hum are negative controls.
-- Five-minute MP3 accepted; files exceeding five minutes rejected.
+- Highly rhythmic percussion can mimic repeating groove clicks; tentative RPM guesses may be wrong.
+- Crackle may be from shellac, vinyl, an earlier disc transfer, or other audio damage.
+- Electrical hum and TV tones can enter during recording, copying, broadcast, or digitization.
+- Short MP3s may discard high-frequency broadcast tones.
+- YouTube retrieval can fail due to third-party access restrictions.
 
-## Interpretation and limitations
-
-These are **heuristic screens**, not scientifically validated forensic likelihoods. The RPM relaxation can produce additional false positives in rhythmic music; weak matches are explicitly tentative. The NDR notch is a filter signature and is not specific enough to establish a broadcaster. Broadcast and hum signatures can be introduced at any stage of the recording chain. More independent real-world controls (commercial vinyl, shellac 78s, cassette dubs, clean digital masters, broadcast recordings) are needed to measure sensitivity and specificity.
+These are exploratory clues, not reliable source-identification probabilities.

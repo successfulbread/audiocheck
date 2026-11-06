@@ -1,4 +1,4 @@
-"""AudioCheck v0.9: best-supported, calibrated evidence indicators.
+"""AudioCheck v1.0: approachable evidence-based recording guesses.
 
 Measures evidence, not proof of an original recording medium or location.
 Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
@@ -342,8 +342,8 @@ def _rotation_matches(times, target_period, relaxed=False):
     the short-duration high-pass click filter. Require consecutive turns, a
     stable fitted period and reasonable coverage to reject accidental grids.
     """
-    min_events = 6 if relaxed else 9
-    if len(times) < min_events or len(times) > 230:
+    min_events = 5 if relaxed else 9
+    if len(times) < min_events or len(times) > 320:
         return None
     speed_dev = .045 if relaxed else .025
     periods = [target_period]
@@ -361,7 +361,7 @@ def _rotation_matches(times, target_period, relaxed=False):
                     periods.append(float((edges[idx] + edges[idx+1])/2))
     best = None
     for period in sorted(set(round(p, 5) for p in periods)):
-        tol = min(.031 if relaxed else .018, period * (.021 if relaxed else .012))
+        tol = min(.035 if relaxed else .018, period * (.024 if relaxed else .012))
         for anchor in times:
             nturn = np.rint((times-anchor)/period).astype(int)
             residual = np.abs(times-(anchor+nturn*period))
@@ -379,16 +379,16 @@ def _rotation_matches(times, target_period, relaxed=False):
             span = (keys[-1]-keys[0])*period
             coverage = len(keys)/(keys[-1]-keys[0]+1)
             neighbors = int(np.count_nonzero(np.diff(keys)==1))
-            if span < (8 if relaxed else 15) or coverage < (.49 if relaxed else .60) or neighbors < (4 if relaxed else 7):
+            if span < (7 if relaxed else 15) or coverage < (.44 if relaxed else .60) or neighbors < (3 if relaxed else 7):
                 continue
             slope, offset = np.polyfit(keys.astype(float),vals,1)
             if abs(slope-target_period) > target_period*speed_dev:
                 continue
             fiterr = float(np.sqrt(np.mean((vals-(slope*keys+offset))**2)))
-            if fiterr > (.020 if relaxed else .010):
+            if fiterr > (.023 if relaxed else .010):
                 continue
             fraction = len(keys)/max(len(times),1)
-            if fraction < (.13 if relaxed else .17):
+            if fraction < (.085 if relaxed else .17):
                 continue
             score = len(keys)*coverage/(1+fiterr*80)
             if best is None or score > best['score']:
@@ -402,7 +402,7 @@ def _vinyl_window(audio):
     for ch in range(2):
         times = _click_candidates(audio[:, ch].astype(float), SAMPLE_RATE)
         duration = len(audio) / SAMPLE_RATE
-        if len(times) < 6 or len(times) > duration * 5.5:
+        if len(times) < 5 or len(times) > duration * 10:
             continue
         for rpm, period in ((33.333, 1.8), (45.0, 4/3), (78.0, 60/78)):
             strict = _rotation_matches(times, period, relaxed=False)
@@ -512,13 +512,14 @@ def _consolidate_surface(windows):
     # Most convincing: irregular impulses and granular non-Gaussian HF noise
     # *during quiet passages*, which are less likely to be drums.
     if quiet >= 3 and broad >= 8 and irregular_sections >= 1:
+        strong_disc = quiet >= 5 and broad >= 25 and clicks >= 12
         detail = (f"Detected irregular short clicks ({clicks} in qualifying sections) "
                   f"and a crackling high-frequency texture in {broad} half-second frames. "
                   f"Importantly, {quiet} noisy frames occurred during quieter passages, "
                   "where ordinary musical percussion is less likely to explain them. "
                   "This strongly suggests a transferred grooved disc (vinyl or shellac); "
                   "it does not reveal record RPM or prove the last playback device was a turntable.")
-        return verdict("Disc surface noise likely", "Possible", detail)
+        return verdict("Disc crackle found", "High" if strong_disc else "Possible", detail)
     if (irregular_sections >= 2 and broad_sections >= 2 and broad >= 20) or (
         quiet >= 3 and broad >= 14):
         return verdict(
@@ -560,13 +561,14 @@ def _consolidate_vinyl(windows):
     matched=[h for h in ranked_pool if h['rpm']==rpm]
     events=max(h['events'] for h in matched)
     name=('33⅓' if abs(rpm-33.333)<.2 else f'{rpm:g}')
-    label=f'Possible {name} RPM' if not strict else f'Likely {name} RPM'
-    detail=(f'{events} short click events lined up near {name} RPM in '
-            f'{len(matched)} analyzed section(s). '
-            + ('This was a relaxed match; percussion or editing could mimic the timing.'
-               if not strict else 'Multiple consecutive revolutions supported the match, but percussion can still imitate this.')
-            + ' It identifies a possible record rotation in the copying chain, not the current file format.')
-    return verdict(label,'Tentative' if not strict else 'Possible',detail)
+    high_match = bool(strict and any(h['events'] >= 10 and h['pairs'] >= 7 for h in matched))
+    good_match = bool(strict or any(h['events'] >= 7 and h['pairs'] >= 5
+                                    and h['fit_ms'] <= 16 for h in matched))
+    label = f'Likely {name} RPM' if good_match else f'Possible {name} RPM'
+    detail = (f'{events} quick clicks match the timing of a {name} RPM disc '
+              f'in {len(matched)} section(s). '
+              'Music or repeated drum sounds can sometimes imitate this pattern.')
+    return verdict(label, 'High' if high_match else 'Possible' if good_match else 'Tentative', detail)
 
 def _consolidate_electrical(windows):
     """Report the best-supported family, including a transparent weak best guess."""
@@ -647,7 +649,7 @@ def _consolidate_broadcast(windows):
         details.append(f'{labels[name]}: a persistent narrow peak at {meas["freq"]:.1f} Hz '
                        f'({meas["snr"]:.0f} dB above neighbouring frequencies).')
     return verdict(('Likely ' if strong else 'Possible ')+names,
-        'Possible' if strong else 'Tentative',
+        'High' if strong and best[4]['snr'] >= 18 else 'Possible' if strong else 'Tentative',
         ' '.join(details)+' This is a clue to equipment or later copying, not proof of the original studio country.')
 
 
@@ -785,17 +787,18 @@ def analyze_path(path, file_name=None):
     broadcast = _consolidate_broadcast(analyzed)
     ndr = _consolidate_ndr(analyzed)
     diag = _diagnostics(analyzed)
-    fm = 'FM radio pilot' in broadcast['result'] and broadcast['certainty'] in {'Possible','Tentative'}
-    ntsc = 'NTSC-type TV' in broadcast['result'] and broadcast['certainty'] in {'Possible','Tentative'}
-    disc = rotation['certainty'] in {'Possible','Tentative'} or surface['result']=='Disc surface noise likely'
-    surface_hint = surface['certainty'] in ('Possible','Tentative')
+    fm = 'FM radio pilot' in broadcast['result'] and broadcast['certainty'] in {'High','Possible','Tentative'}
+    ntsc = 'NTSC-type TV' in broadcast['result'] and broadcast['certainty'] in {'High','Possible','Tentative'}
+    disc = rotation['certainty'] in {'High','Possible','Tentative'} or surface['certainty'] in {'High','Possible','Tentative'}
+    surface_hint = surface['certainty'] in ('High','Possible','Tentative')
     interruptions = diag['possible_interruptions']
     if disc:
-        prefix = 'Likely record (vinyl/shellac)' if surface['result']=='Disc surface noise likely' or rotation['certainty']=='Possible' else 'Possible record (vinyl/shellac)'
+        prefix = 'Likely Vinyl / Record'
         reason = ('Irregular high-frequency crackle and pops suggest a physical disc somewhere in the transfer chain. '
                   if surface_hint else 'Repeated click timings suggest a rotating disc. ')
-        source = verdict(prefix,'Possible' if prefix.startswith('Likely') else 'Tentative',
-                         reason + (rotation['detail'] if rotation['certainty'] in {'Possible','Tentative'} else surface['detail']))
+        strong_source = surface['certainty'] == 'High' or rotation['certainty'] == 'High'
+        source = verdict(prefix, 'High' if strong_source else 'Possible',
+                         reason + (rotation['detail'] if rotation['certainty'] in {'High','Possible','Tentative'} else surface['detail']))
     elif fm:
         source = verdict('Likely FM radio recording','Possible',broadcast['detail'])
     elif ntsc:
@@ -805,17 +808,17 @@ def analyze_path(path, file_name=None):
     elif ndr['certainty'] in ('Possible','Tentative'):
         source = verdict('Possible radio / cassette transfer','Tentative',ndr['detail'])
     elif interruptions >= 2:
-        source = verdict('Possible cassette / tape','Tentative',
+        source = verdict('Likely Cassette / Tape','Tentative',
             f'{interruptions} short dropouts were found. Tape wear is one possibility, '
             'but digital glitches can also cause dropouts.')
     elif surface_hint:
-        source = verdict('Possible record (vinyl/shellac)','Tentative',surface['detail'])
+        source = verdict('Likely Vinyl / Record','Tentative',surface['detail'])
     else:
         source = verdict('Source uncertain','Not measurable',
             'No distinctive source artifacts were found. A clean record, cassette and digital source can sound similar.')
     stereo = _stereo_format(analyzed, metadata['channels'])
     if disc:
-        medium=verdict('Disc transfer clues','Possible',source['detail'])
+        medium=verdict('Disc transfer clues',source['certainty'],source['detail'])
     elif fm or ntsc or ndr['certainty'] in ('Possible','Tentative'):
         medium=verdict('Broadcast or transfer clues','Tentative',broadcast['detail'])
     else:
