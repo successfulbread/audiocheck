@@ -1,4 +1,4 @@
-"""AudioCheck v0.9 — simple light-theme Streamlit audio clues."""
+"""AudioCheck v0.9.1 — defensive results display."""
 from __future__ import annotations
 
 import html
@@ -145,25 +145,32 @@ if st.session_state.report_error:
 
 
 def meaningful(item):
-    return item['certainty'] in {'Strong','High','Possible','Tentative'} and \
-           not any(w in item['result'].lower() for w in ('none detected','not measurable','unclear','no reliable','no clear'))
+    # Some deployed repositories have an older analyzer.py that lacks newer rows.
+    # Missing/partial findings are not positive clues; they must not crash the UI.
+    if not isinstance(item, dict):
+        return False
+    certainty = str(item.get('certainty', 'Unclear'))
+    result = str(item.get('result', 'Unclear')).lower()
+    return certainty in {'Strong', 'High', 'Possible', 'Tentative'} and not any(
+        w in result for w in ('none detected', 'not measurable', 'unclear',
+                            'no reliable', 'no clear'))
 
 def badge_class(item):
-    return {'Strong':'good','High':'good','Possible':'possible','Tentative':'weak'}.get(item['certainty'],'weak')
+    return {'Strong':'good','High':'good','Possible':'possible','Tentative':'weak'}.get(item.get('certainty','Unclear'),'weak')
 
 def card(label,item):
     cls=badge_class(item)
-    certainty={'Strong':'Strong clue','High':'Strong clue','Possible':'Good clue','Tentative':'Early clue'}.get(item['certainty'],'Unknown')
+    certainty={'Strong':'Strong clue','High':'Strong clue','Possible':'Good clue','Tentative':'Early clue'}.get(item.get('certainty','Unclear'),'Unknown')
     return (f'<div class="ac-card {cls}"><div class="ac-label">{html.escape(label)}</div>'
-            f'<div class="ac-result">{html.escape(str(item["result"]))}</div>'
+            f'<div class="ac-result">{html.escape(str(item.get("result", "Unclear")))}</div>'
             f'<span class="ac-badge {cls}">{certainty}</span>'
             '<details><summary>Why?</summary>'
-            f'<p>{html.escape(str(item["detail"]))}</p></details></div>')
+            f'<p>{html.escape(str(item.get("detail", "No supporting detail available.")))}</p></details></div>')
 
 
 def summary(found):
     notes=[]
-    source=found['Likely audio source']['result'].lower()
+    source=str(found.get('Likely audio source',{}).get('result','Source uncertain')).lower()
     if 'record' in source:
         if meaningful(found.get('Disc surface noise', {})):
             notes.append('Sharp, irregular pops and crackle, including noise between musical sounds, are consistent with a record transfer.')
@@ -205,7 +212,7 @@ if report:
     st.markdown('<div class="ac-meta"><strong>'+html.escape(report['name'])+'</strong>'+
       html.escape(report['kind'])+f' · {meta["duration"]:.0f} sec · {meta["analyzed_seconds"]:.0f} sec analyzed</div>',
       unsafe_allow_html=True)
-    src=found['Likely audio source']
+    src=found.get('Likely audio source', {'result':'Source uncertain', 'certainty':'Unclear', 'detail':'No source classification available.'})
     st.markdown('<section class="ac-source"><div class="ac-eyepill">Best guess: recording source</div>'+
                 '<div class="ac-source-title">'+html.escape(src['result'])+'</div>'+
                 '<div class="ac-source-small">'+html.escape('Evidence level: '+src['certainty'])+'</div></section>',
@@ -216,7 +223,7 @@ if report:
               ('Radio / TV signals','TV / radio signal'),('NDR-style 10 kHz dip','NDR 10 kHz dip')]
     positive=[(short,found[key]) for key,short in priority if key in found and meaningful(found[key])]
     rank={'Strong':0,'High':0,'Possible':1,'Tentative':2}
-    positive.sort(key=lambda entry:rank.get(entry[1]['certainty'],3))
+    positive.sort(key=lambda entry:rank.get(entry[1].get('certainty','Unclear'),3))
     if positive:
         st.markdown('<div class="ac-heading">Other clues found</div>',unsafe_allow_html=True)
         st.markdown('<div class="ac-grid">'+''.join(card(*entry) for entry in positive)+'</div>',unsafe_allow_html=True)
@@ -226,14 +233,14 @@ if report:
         with st.expander('More audio details'):
             for key,item in remaining:
                 st.markdown(f'**{key}:** {item["result"]}')
-                st.caption(item['detail'])
+                st.caption(item.get('detail','No supporting detail available.'))
     negative=[(key,item) for key,item in rows if key not in {'Likely audio source',
               'Recording-medium clues'} and not meaningful(item)]
     if negative:
         with st.expander('Checks without a clear finding'):
             for key,item in negative:
-                st.write(f'**{key}:** {item["result"]}')
-                st.caption(item['detail'])
+                st.write(f'**{key}:** {item.get("result","Unclear")}')
+                st.caption(item.get('detail','No supporting detail available.'))
     with st.expander('Technical file information'):
         st.write(f'Codec: {meta["codec"]} · Sample rate: {meta["input_rate"]:,} Hz · Channels: {meta["channels"]}')
         st.write(f'Sampled sections: {meta["diagnostics"]["sampled_sections"]}')
