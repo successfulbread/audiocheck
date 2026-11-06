@@ -1,31 +1,42 @@
-# AudioCheck v1.2 - Recording-source guesses and digital-file dating
+# AudioCheck v1.3
 
-AudioCheck is a Streamlit app for checking clues in MP3, WAV, FLAC, OGG, M4A and MPEG audio (4 seconds to 5 minutes; 100 MB maximum).
+A light-themed Streamlit app for investigating clues in old recordings. Supports MP3, WAV, FLAC, OGG, M4A and MPEG audio files, up to 5 minutes and 100 MB.
 
-The homepage explains what it does: **Upload a song to check its likely source, record speed, broadcast signals and digital file age.**
+## What's new
 
-## What changed in v1.2
+- **Frequency profile is now part of "Likely origin" -> "Why?".** The measured upper audio range and any sharp filtering are explained alongside the record/tape/FM clues. A low-frequency cutoff or 15 kHz limit alone is not proof of a specific source. The extra standalone frequency card has been removed.
+- **More informative digital-file age.** Reads ID3 `TDEN` encoding-time and `TDTG` tagging-time separately from `TDRC`/`TDRL` music dates. Checks FFprobe's encoding, creation and software tags, and MP3 encoder version. LAME 3.99.5 can suggest no earlier than 2012-02-28; LAME 3.100 no earlier than 2017-10-13. FFmpeg Lavc version families 57-62 provide broader lower bounds. The "Why?" text explains which tag or version is responsible.
+- **New Archive.org link option.** Paste a *direct audio file download link* such as `https://archive.org/download/identifier/track.mp3`. Only archive.org links and redirects are accepted. This is an alternative for authorized archival material, **not a way to bypass YouTube restrictions**.
+- The original file-upload form and **YouTube (beta)** option remain. YouTube retrieval can still fail with HTTP 403 on Streamlit's server; there is no guaranteed purely-Streamlit fix.
 
-- **Likely origin:** One bright result combining record crackle, repeated RPM clicks, FM pilot tones, tape-like gaps and frequency response. Crackle and dropout results no longer appear as duplicate main cards.
-- **Rough score:** If meaningful evidence exists, the main card shows a percentage *clue score*. This is an uncalibrated relative evidence ranking, **not a probability** or scientific statement of original medium. A source may have passed through vinyl, cassette, FM and digital conversion in sequence.
-- **Why?:** Each source result lists the actual supporting signals in plain English. Electrical/TV interference is reported separately; a TV scan-line tone alone does not prove radio, tape or record as the original medium.
-- **Frequency fingerprint:** The old 'Audio range & origin' label is gone. This card reports cutoff, filtering, or wide-band sound; it is not treated as decisive medium evidence.
-- **Digital file age:** Where recognizable, shows the earliest possible *digital encoding* year (for example LAME 3.99.5 -> 2012 or later; Lavc57.* -> 2015 or later). Codec, bitrate, VBR/CBR and encoder are still shown beneath the result. A tagged encode date is reported as an unverified tag. This does not date the original music.
-- Existing file upload and YouTube beta remain. A successful file upload clears the file selection; results stay on screen. All remaining result cards are sorted by strength with greys last.
+## GitHub / Streamlit update
 
-## Updating the live Streamlit site
+1. Extract the ZIP, open GitHub repository `audiocheck` and replace the following files at its root: `app.py`, `analyzer.py`, `file_history.py`, `youtube_source.py`, `requirements.txt`, `packages.txt`.
+2. Add **new** file `archive_source.py` at the root.
+3. Optional: replace `.streamlit/config.toml` to keep the light theme.
+4. Commit to `main`. The existing Streamlit app will rebuild using `app.py`.
 
-1. Extract the ZIP. Open your existing GitHub `audiocheck` repository.
-2. Replace `app.py`, `analyzer.py`, and `file_history.py` at the repository root. All other existing files can remain as they are.
-3. Commit to `main`; Streamlit automatically redeploys. Keep `app.py` as the main script.
-4. For a clean or full reinstall, also upload `youtube_source.py`, `requirements.txt`, `packages.txt`, and `.streamlit/config.toml`, preserving paths.
+For the Archive.org tab, use the **downloaded MP3's own URL**, not the `/details/...` item page. Users should only retrieve recordings they have permission to analyze. Internet access from Streamlit Cloud to archive.org is required and may occasionally fail.
 
-## Important interpretation
+## Date interpretation
 
-'Likely Vinyl' means the **audio carries evidence of a disc in its chain**. It may have been copied through tape or radio afterward. A 50/60 Hz hum suggests electrical equipment, not necessarily the original country. A high-frequency cutoff by itself cannot prove cassette, radio, vinyl or digital mastering. A digital file's codec date is a lower bound on the currently encoded version, not the date of the original recording.
+Dates are **about the uploaded digital encoding or file processing**, never about when the song was performed or recorded.
 
-## Running tests
+- Explicit ID3 `TDEN`: user-editable stated encoding date.
+- Explicit `TDTG`: user-editable tagging date, **not** the original creation date.
+- `TDRC`, `TDRL`, `date`, `year`: may describe the music, so never treat them as file creation dates.
+- LAME `TSSE` / MP3 encoder tag: earliest availability of the *named software version*; files may have been created much later.
+- `Lavc` = encoded audio's software family. `Lavf` = container writer (the file may have been remuxed later, without re-encoding).
+- An undated MP3 is not automatically "from the 1990s"; an MP3 may be encoded today from a much older source.
 
-`PYTHONPATH=. pytest -q`
+Useful references:
+- [ID3v2.4 frames: TDEN / TDTG / TDRC / TSSE](https://id3.org/id3v2.4.0-frames)
+- [LAME release dates](https://github.com/enzo1982/lame/releases)
+- [FFmpeg API version history](https://github.com/FFmpeg/FFmpeg/blob/master/doc/APIchanges)
+- [yt-dlp YouTube notes](https://github.com/yt-dlp/yt-dlp/wiki/Extractors)
 
-The tests use synthetic signals, metadata-tagged MP3s and two user-supplied recordings (when available). Results are documented in `VALIDATION.md`. Live Streamlit Cloud deployment remains to be verified after GitHub update.
+## Run tests
+
+`PYTHONPATH=. pytest -q tests`
+
+Version 1.3 local test suite: **89 passed**. Includes actual analysis of two user-provided historical recordings, synthetic signal tests, metadata-tag tests, and simulated Archive.org downloads. A real Archive.org download through the new tab and a live YouTube request on Streamlit Cloud have **not** been verified.

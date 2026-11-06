@@ -1004,6 +1004,9 @@ def analyze_path(path, file_name=None):
                if interruption_count else verdict('None found', 'Not detected', 'No brief interruptions.'))
     bandwidth = _bandwidth_verdict(analyzed, metadata, broadcast)
     source = _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, metadata)
+    # The frequency response is evidence for the source guess, not a separate
+    # independent conclusion. Keep the measured facts in the origin card.
+    source["frequency_clue"] = bandwidth
     stereo = _stereo_format(analyzed, metadata['channels'])
     rows=[
         ('Likely audio source',source),

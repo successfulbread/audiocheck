@@ -1,4 +1,4 @@
-"""AudioCheck v1.2 - unified origin clue, encoding date, and clear upload flow."""
+"""AudioCheck v1.3 - folded frequency clues and improved file-age dating."""
 from __future__ import annotations
 
 import html
@@ -10,6 +10,7 @@ import streamlit as st
 
 from analyzer import MAX_BYTES, analyze, analyze_path
 from youtube_source import download_youtube_audio
+from archive_source import fetch_archive_audio
 
 st.set_page_config(page_title="AudioCheck | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
 
@@ -108,7 +109,6 @@ LABELS = {
     "Radio / TV signals": ("Radio / TV signal", "&#9737;"),
     "NDR-style 10 kHz dip": ("NDR 10 kHz dip", "&#9836;"),
     "Stereo format": ("Stereo / mono", "&#8644;"),
-    "Audio bandwidth": ("Frequency fingerprint", "&#8767;"),
     "Digital file history": ("Digital file age", "&#128197;"),
     "Playback speed": ("Playback speed", "&#8635;"),
 }
@@ -181,7 +181,7 @@ def why(key, item):
     detail = str(item.get("detail", ""))
     raw = str(item.get("result", ""))
     if key == "Likely audio source":
-        return detail[:350] if detail else "Source guess uses clicks, crackle, dropouts and radio tones."
+        return detail[:350] if detail else "Best guess from pops, tape clues, broadcast tones and frequency range."
     if key == "Vinyl rotation":
         match = re.search(r"(\d+) (?:short|quick) click", detail)
         count = f"{match.group(1)} sharp pops" if match else "Sharp pops"
@@ -230,14 +230,23 @@ def card(label, item, key=None):
     description = why(key, item)
     sub = ""
     details_html = f'<p>{html.escape(description)}</p>'
-    if key == "Likely audio source" and meaningful(item):
+    if key == "Likely audio source":
         pct = item.get("guess_percent")
-        if isinstance(pct, (int, float)) and 0 < pct < 100:
+        if meaningful(item) and isinstance(pct, (int, float)) and 0 < pct < 100:
             sub = f'<div class="ac-sub">~{int(pct)}% rough clue score</div>'
         evidence = item.get("evidence", [])
-        if isinstance(evidence, list) and evidence:
-            facts = [html.escape(str(x)) for x in evidence if x]
-            details_html = '<ul>' + ''.join(f'<li>{fact}</li>' for fact in facts[:6]) + '</ul>'
+        facts = [str(x) for x in evidence if x] if isinstance(evidence, list) else []
+        # Bandwidth supports a source guess but also has alternate causes.
+        # Report the measured range and caveat in the same Why? disclosure.
+        freq = item.get("frequency_clue") or {}
+        if isinstance(freq, dict) and freq.get("certainty") not in ("Not measurable", "Unclear"):
+            summary = str(freq.get("result") or "").strip()
+            reason = str(freq.get("detail") or "").strip()
+            if summary:
+                facts.append("Frequency range: " + summary + (". " + reason if reason else ""))
+        # Short factual list. An uncertain source still gets the frequency facts.
+        if facts:
+            details_html = '<ul>' + ''.join(f'<li>{html.escape(f)}</li>' for f in facts[:7]) + '</ul>'
     elif key == "Digital file history":
         facts = item.get("facts", {}) if isinstance(item.get("facts"), dict) else {}
         fmt = str(facts.get("codec") or "").upper()
@@ -290,7 +299,7 @@ def sorted_findings(rows):
 
 
 st.markdown('<div class="ac-heading">Check a song</div>', unsafe_allow_html=True)
-file_tab, youtube_tab = st.tabs(["Upload MP3 / audio", "YouTube link (beta)"])
+file_tab, archive_tab, youtube_tab = st.tabs(["Upload audio", "Archive.org link", "YouTube (beta)"])
 with file_tab:
     with st.form("upload_form", enter_to_submit=False, clear_on_submit=False):
         uploaded = st.file_uploader("Choose a file (up to 5 minutes)",
@@ -317,7 +326,31 @@ with file_tab:
                 st.session_state.report_error = str(exc)
             except Exception:
                 st.session_state.report_error = "Analysis failed. Check the app logs."
+with archive_tab:
+    with st.form("archive_form", enter_to_submit=False):
+        archive_link = st.text_input("Direct audio file URL", placeholder="https://archive.org/download/record-id/track.mp3")
+        archive_allowed = st.checkbox("I may download and analyze this recording")
+        archive_submit = st.form_submit_button("Analyze archive audio", use_container_width=True)
+    if archive_submit:
+        st.session_state.report_error = None
+        if not archive_link.strip():
+            st.session_state.report_error = "Paste a direct Internet Archive audio-file link."
+        elif not archive_allowed:
+            st.session_state.report_error = "Confirm you have permission to analyze the audio."
+        else:
+            try:
+                with st.spinner("Fetching archive audio..."):
+                    with tempfile.TemporaryDirectory(prefix="audiocheck_archive_") as td:
+                        path, title = fetch_archive_audio(archive_link, Path(td))
+                        rows, meta = analyze_path(path, title)
+                store_report(rows, meta, title, "Archive")
+            except ValueError as exc:
+                st.session_state.report_error = str(exc)
+            except Exception:
+                st.session_state.report_error = "This archive link could not be analyzed. Try uploading the MP3."
+
 with youtube_tab:
+    st.caption("YouTube can block cloud servers (403). Archive.org direct audio links or file uploads are more reliable.")
     with st.form("youtube_form", enter_to_submit=False):
         link = st.text_input("Video address", placeholder="https://www.youtube.com/watch?v=...")
         allowed = st.checkbox("I have permission to retrieve and analyze this audio")

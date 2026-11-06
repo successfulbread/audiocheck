@@ -1,14 +1,9 @@
-# AudioCheck v1.2 - Validation
+# AudioCheck v1.3 validation
 
-- Regression suite: 79 local tests passed (run `PYTHONPATH=. pytest -q`).
-- Historical user-provided 'Hysterics Rag' MP3: **Likely Vinyl / Record** (High; about 81% relative clue score) based on irregular record crackle, quieter-section noise, and a weaker possible 45 RPM click pattern. The MP3's LAME 3.99.5 tag supports **encoded 2012 or later**.
-- User-provided EKT MPEG audio: strong **NTSC-type TV scan-line interference** is retained, and digital-file metadata now shows **encoded 2015 or later** from `Lavc57.10`. The original medium is **not established** by either the scan tone or MP3 codec.
-- Source-combination tests cover clear disc evidence, FM 19 kHz pilot, tape-like short dropouts, wide but clean audio, TV interference without a source conclusion, and no-evidence controls.
-- Display tests cover escaping untrusted text, sorted/grey cards, combined crackle/dropout clues, age + codec subtitling, and evidence details in the Why? dropdown.
-- The app still clears the selected file after successful analysis without discarding the report.
-
-**Limitations:** Source scores are rough heuristic weights, not measured probabilities. Even a convincing vinyl fingerprint may have been copied to cassette, radio, or MP3. The file creation date cannot be established from bitrate alone. Release-year tags must not be mistaken for encode dates. The live website and all Android browsers have not been individually tested with this build.
-
-Encoder-date reference points:
-- LAME 3.99.5 was released February 28, 2012: https://github.com/enzo1982/lame/releases
-- FFmpeg `libavcodec` major version 57 was introduced in 2015: https://fuchsia.googlesource.com/third_party/ffmpeg/+/n3.3.7/doc/APIchanges
+- Automated test suite: **89 passed** (local).
+- Real supplied **Tony Parenti's Ragtimers / Hysterics Rag** MP3: "Likely Vinyl / Record"; bandwidth clue is "Wide range (~18.2 kHz)" (may reflect surface noise); software tag "LAME 64bits version 3.99.5" => digital encoding from **2012 or later**, earliest named release **2012-02-28**.
+- Real supplied **Everyone Knows That** MP3: no definitive original medium; "MP3-like cutoff (~16 kHz)" explains that the ~90 kbps MP3 encoding may account for high-frequency filtering; TV test detects NTSC-type signal; "Lavc57.10" => encoding could date from **2015 or later**.
+- New date tests: LAME 3.99.5 and 3.100, FFmpeg Lavc 57-62 families, TDRC song-year rejection, TDEN encoding dates, newer-container/older-audio distinction.
+- New Archive.org link tests: reject non-HTTPS/non-archive hosts and item-page URLs, simulated file transfer, redirect host validation. This does not guarantee Streamlit Cloud access to archive.org.
+- Unchanged findings: frequency range, codec, pops and hum cannot by themselves prove the original recording medium, studio or original date.
+- The Streamlit Cloud live interface and direct YouTube retrieval (which may return HTTP 403) remain unverified.

@@ -85,8 +85,8 @@ def _failure_message(result: subprocess.CompletedProcess) -> str:
         return ("YouTube requires a human verification for this cloud server. "
                 "AudioCheck cannot complete that request; upload the audio file instead.")
     if "403" in message or "forbidden" in message:
-        return ("YouTube refused the audio request (HTTP 403) from Streamlit Cloud. "
-                "This may be a server-IP restriction; upload the audio file instead.")
+        return ("YouTube blocked this cloud server (403). Try uploading the audio file, "
+                "or use a direct Archive.org audio link if available.")
     if "js runtime" in message or "javascript runtime" in message or "ejs" in message:
         return ("YouTube's JavaScript verification could not run on this server. "
                 "Check that the deno and yt-dlp dependencies deployed successfully.")
