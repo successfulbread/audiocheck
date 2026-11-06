@@ -1,4 +1,4 @@
-"""AudioCheck v1.0 - bright, simple, sorted results and a clearing upload form."""
+"""AudioCheck v1.1 - bright, simple, sorted results and a clearing upload form."""
 from __future__ import annotations
 
 import html
@@ -69,6 +69,11 @@ if "upload_nonce" not in st.session_state:
 
 
 def store_report(rows, meta, name, kind):
+    # A YouTube re-encode is not evidence of the uploader's ORIGINAL file date.
+    if kind == "YouTube":
+        rows = [(key, {"result": "YouTube stream only", "certainty": "Tentative",
+                       "detail": "YouTube may re-encode audio. This stream cannot date the original uploaded file."}
+                 if key == "Digital file history" else value) for key, value in rows]
     # Do not store the uploaded bytes: only the small resulting report.
     st.session_state.report = {"rows": rows, "meta": meta, "name": name, "kind": kind}
     st.session_state.report_error = None
@@ -101,7 +106,8 @@ LABELS = {
     "Disc surface noise": ("Disc crackle", "&#9678;"),
     "Possible tape dropouts": ("Tape dropouts", "&#9646;"),
     "Stereo format": ("Stereo / mono", "&#8644;"),
-    "Audio bandwidth": ("Audio range", "&#8767;"),
+    "Audio bandwidth": ("Audio range & origin", "&#8767;"),
+    "Digital file history": ("Digital file history", "&#128197;"),
     "Playback speed": ("Playback speed", "&#8635;"),
 }
 
@@ -123,6 +129,8 @@ def display_result(key, item):
             return "No clear crackle"
         if key == "Playback speed":
             return "Unknown"
+        if key == "Digital file history":
+            return raw
         return "Unclear"
     if key == "Likely audio source":
         if "record" in raw.lower() or "vinyl" in raw.lower():
@@ -172,6 +180,7 @@ def why(key, item):
             "Possible tape dropouts": "No short, sudden losses of sound were found.",
             "Stereo format": "The channels were too faint or inconsistent to compare.",
             "Audio bandwidth": "The spectrum was too faint to measure.",
+            "Digital file history": "No useful encoding date or encoder version is in the file.",
             "Playback speed": "Without a reference pitch or timing signal, overall speed can't be checked.",
         }.get(key, "Not enough evidence to make a useful guess.")
     detail = str(item.get("detail", ""))
@@ -217,8 +226,9 @@ def why(key, item):
         if raw == "Mono":
             return "The file contains one audio channel."
         return "The left and right channels differ." if "Stereo" in raw else "Two channels carry almost identical sound."
-    if key == "Audio bandwidth":
-        return "This is the highest area with meaningful sound energy, not proof of a format."
+    if key in ("Audio bandwidth", "Digital file history"):
+        # Show measured facts and meaningful alternate explanations, not a generic disclaimer.
+        return detail[:275] if detail else "No date or frequency clue found."
     return detail[:160] if detail else "Some evidence supports this guess."
 
 
@@ -331,8 +341,13 @@ if report:
     st.markdown('<div class="ac-grid">' + "".join(
         card(LABELS[key][0], item, key) for key, item in results) + '</div>', unsafe_allow_html=True)
     with st.expander("File details"):
-        st.caption(f'Codec: {meta.get("codec", "unknown")} | '
-                   f'Sample rate: {meta.get("input_rate", "?")} Hz | '
+        info = meta.get("file_history", {}).get("facts", {})
+        bits = info.get("bitrate_kbps")
+        rate_text = f" · {bits} kbps" if bits else ""
+        st.caption(f'Codec: {meta.get("codec", "unknown")}{rate_text} · '
+                   f'Sample rate: {meta.get("input_rate", "?")} Hz · '
                    f'Channels: {meta.get("channels", "?")}')
+        if report.get("kind") == "YouTube":
+            st.caption("YouTube gives us a downloaded stream, not the original uploader's file or original metadata.")
     st.markdown('<div class="ac-foot">Fun clues, not proof. Noise can come from a later recording or copy.</div>',
                 unsafe_allow_html=True)

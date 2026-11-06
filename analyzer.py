@@ -1,4 +1,4 @@
-"""AudioCheck v1.0: approachable evidence-based recording guesses.
+"""AudioCheck v1.1: approachable evidence-based recording guesses.
 
 Measures evidence, not proof of an original recording medium or location.
 Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
@@ -14,6 +14,7 @@ import tempfile
 
 import numpy as np
 from scipy import ndimage, signal
+from file_history import inspect_file
 
 MAX_SECONDS = 300.0
 MIN_SECONDS = 4.0
@@ -40,7 +41,7 @@ def _command(args, timeout=40):
 def _probe(path):
     p = _command([
         "ffprobe", "-v", "error", "-select_streams", "a:0",
-        "-show_entries", "stream=codec_name,sample_rate,channels,duration:format=duration",
+        "-show_entries", "stream=codec_name,sample_rate,channels,duration,bit_rate:format=duration,format_name,bit_rate:stream_tags:format_tags",
         "-of", "json", str(path)
     ])
     try:
@@ -58,7 +59,10 @@ def _probe(path):
     if fs < 4000 or channels not in (1, 2):
         raise ValueError("Please upload mono or stereo audio with a standard sample rate.")
     return {"duration": duration, "input_rate": fs, "channels": channels,
-            "codec": stream.get("codec_name", "unknown")}
+            "codec": stream.get("codec_name", "unknown"),
+            "bit_rate": stream.get("bit_rate") or data.get("format", {}).get("bit_rate"),
+            "stream_tags": stream.get("tags") or {},
+            "format_tags": data.get("format", {}).get("tags") or {}}
 
 
 def _windows(duration):
@@ -740,6 +744,103 @@ def _pilot_variation_hz(audio):
     return float(np.median(np.abs(values - np.median(values))) * 1.4826)
 
 
+def _bandwidth_window(audio, original_rate):
+    """Describe high-frequency *content*, not a proven recording format.
+
+    Uses broad frequency bands and median spectral energy to avoid treating
+    a single TV scan line / FM pilot as full-range audio. Always respect the
+    original sample-rate Nyquist ceiling.
+    """
+    ceiling = min(20000.0, original_rate / 2.0)
+    if ceiling < 4500:
+        return None
+    measures = []
+    for ch in range(audio.shape[1]):
+        data = audio[:, ch].astype(np.float64)
+        if float(np.mean(data**2)) < 1e-12:
+            continue
+        f, power = signal.welch(data, fs=SAMPLE_RATE, nperseg=8192,
+                                noverlap=4096, scaling='density', average='median')
+        # 250-Hz bands: robust against narrow spikes such as a 15,734-Hz tone.
+        bins = np.arange(0, ceiling + 250, 250.0)
+        hz = []; energy = []
+        for left, right in zip(bins[:-1], bins[1:]):
+            inside = (f >= left) & (f < right)
+            if np.count_nonzero(inside) < 8:
+                continue
+            hz.append((left+right)/2)
+            energy.append(float(np.median(power[inside])))
+        if len(hz) < 18:
+            continue
+        hz = np.asarray(hz)
+        log = 10 * np.log10(np.maximum(energy, 1e-23))
+        reference = float(np.percentile(log[(hz>=1500)&(hz<=5500)], 75))
+        rel = log-reference
+        meaningful = (hz >= 4000)&(rel > -47)
+        end = float(hz[meaningful][-1] + 125) if np.any(meaningful) else None
+        if end is None:
+            continue
+        # Compare ranges either side of an FM-style filter, but only if both
+        # sides are actually measurable and the lower side has some energy.
+        before = rel[(hz>=12500)&(hz<14750)]
+        after = rel[(hz>=16000)&(hz<18000)]
+        fm_drop = (float(np.median(before)-np.median(after))
+                   if len(before)>=4 and len(after)>=4 else None)
+        sharp_fm = (fm_drop is not None and fm_drop>=18 and
+                    float(np.median(before)) > -44 and float(np.median(after)) < -24)
+        if sharp_fm:
+            baseline=float(np.median(before[(len(before)//3):]))
+            crossings = np.where((hz>=13750)&(hz<=18500)&(rel<=baseline-11))[0]
+            if len(crossings):
+                end=float(hz[crossings[0]]-125)
+        measures.append({'range_khz': round(min(end,ceiling)/1000,1),
+                         'sharp_fm': sharp_fm,
+                         'drop_db': round(fm_drop,1) if fm_drop is not None else None})
+    if not measures:
+        return None
+    # Choose the more extended channel; preserve evidence from either channel.
+    return max(measures, key=lambda item: (item['range_khz'], item['sharp_fm']))
+
+
+def _bandwidth_verdict(windows, metadata, broadcast):
+    features=[w['bandwidth_feature'] for w in windows if w.get('bandwidth_feature')]
+    if not features:
+        return verdict('No range clue','Not measurable','Not enough usable high-frequency sound to measure.')
+    limit=metadata['input_rate']/2000
+    cutoff=float(np.median([w['range_khz'] for w in features]))
+    sharp=sum(bool(w['sharp_fm']) for w in features)>=max(1,math.ceil(len(features)*0.5))
+    fm_present='FM radio pilot' in broadcast.get('result','') and broadcast.get('certainty') in ('High','Possible','Tentative')
+    bitrate=metadata.get('file_history',{}).get('facts',{}).get('bitrate_kbps')
+    mp3_compressed=(metadata['codec']=='mp3' and bitrate is not None and bitrate<=160)
+    if limit < 18 and cutoff >= limit-1.2:
+        return verdict(f'Sample rate limits audio to ~{limit:g} kHz','High',
+            f'This file cannot contain frequencies above {limit:g} kHz because of its sampling rate. Not proof of the original source.')
+    if sharp and 13.5<=cutoff<=17.5:
+        if fm_present:
+            return verdict(f'FM-like cutoff (~{cutoff:g} kHz)','Possible',
+                f'Sound drops sharply around {cutoff:g} kHz and an FM pilot was found. Both fit an FM radio transfer.')
+        if mp3_compressed:
+            return verdict(f'MP3-like cutoff (~{cutoff:g} kHz)','Possible',
+                f'A sharp drop around {cutoff:g} kHz fits low-bitrate MP3 filtering ({bitrate} kbps). FM is another possibility.')
+        return verdict(f'Sharp cutoff (~{cutoff:g} kHz)','Possible',
+            f'Sound drops abruptly around {cutoff:g} kHz. FM broadcast or digital filtering could cause this.')
+    if cutoff<=10.5:
+        return verdict(f'Narrow range (~{cutoff:g} kHz)','Possible',
+            f'Little sound energy survives above {cutoff:g} kHz. Older tape, radio, filtering or MP3 compression could explain it.')
+    if cutoff<=16.5:
+        reason=f'High-frequency sound is weak above roughly {cutoff:g} kHz.'
+        if mp3_compressed:
+            reason+=f' {bitrate} kbps MP3 compression may contribute.'
+        else:
+            reason+=' Tape, radio, older transfers or compression may contribute.'
+        return verdict(f'Limited highs (~{cutoff:g} kHz)','Possible',reason)
+    if cutoff>=18:
+        return verdict(f'Wide range (~{cutoff:g} kHz)','High',
+            f'Energy remains near {cutoff:g} kHz. It could include hiss or crackle, so this does not prove a digital original.')
+    return verdict(f'Audio reaches ~{cutoff:g} kHz','High',
+        f'Audio/noise energy was measured up to around {cutoff:g} kHz. This alone cannot identify a format.')
+
+
 def _diagnostics(windows):
     clips = [w["clipped"] for w in windows]
     cutoffs = [w["cutoff"] for w in windows if w["cutoff"]]
@@ -759,6 +860,7 @@ def analyze_path(path, file_name=None):
     if path.stat().st_size > MAX_BYTES:
         raise ValueError("Maximum file size is 100 MB.")
     metadata = _probe(path)
+    metadata["file_history"] = inspect_file(path, metadata)
     analyzed = []
     analyzed_seconds = 0.0
     for start, seconds in _windows(metadata["duration"]):
@@ -773,7 +875,9 @@ def analyze_path(path, file_name=None):
         pilot_jitter = (_pilot_variation_hz(audio)
                         if fm and fm["pass"] and fm.get("persistent") else None)
         analyzed.append({"vinyl":_vinyl_window(audio), "surface":_surface_noise_window(audio), "mains":mains,
-                         "broadcast":air, "cutoff":cutoff, "dropouts":_dropout_candidates(audio),
+                         "broadcast":air, "cutoff":cutoff,
+                         "bandwidth_feature": _bandwidth_window(audio, metadata["input_rate"]),
+                         "dropouts":_dropout_candidates(audio),
                          "clipped":float(np.mean(np.abs(audio) >= .998)),
                          "pilot_jitter":pilot_jitter, "stereo_corr":stereo_corr,
                          "ndr":_ndr_notch_window(audio, metadata["input_rate"])})
@@ -826,10 +930,7 @@ def analyze_path(path, file_name=None):
     dropout=(verdict(f'{interruptions} brief interruptions','Tentative',
                     'Sudden short level losses; not unique to magnetic tape.')
              if interruptions else verdict('None found','Not detected','No brief near-silent interruptions.'))
-    cutoff=diag['spectral_upper_energy_khz']
-    bandwidth=(verdict(f'Audio extends to ~{cutoff:g} kHz','High',
-                 'This describes the file, not the original studio recording.')
-               if cutoff is not None else verdict('Unclear','Not measurable','No usable spectrum.'))
+    bandwidth = _bandwidth_verdict(analyzed, metadata, broadcast)
     rows=[
         ('Likely audio source',source),
         ('Vinyl rotation',rotation),
@@ -842,10 +943,13 @@ def analyze_path(path, file_name=None):
         ('Playback speed',verdict('No reliable reference','Not measurable',
             'The recording cannot be judged uniformly fast or slow without a trustworthy speed reference.')),
         ('Audio bandwidth',bandwidth),
+        ('Digital file history',metadata['file_history']),
         ('Stereo format',stereo),
     ]
     metadata["analyzed_seconds"] = round(analyzed_seconds, 1)
     metadata["diagnostics"] = diag
+    metadata.pop("stream_tags", None)
+    metadata.pop("format_tags", None)
     return rows, metadata
 
 def analyze(data: bytes, filename: str):

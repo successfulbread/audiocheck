@@ -1,29 +1,14 @@
-# AudioCheck v1.0 validation
+# AudioCheck v1.1 — Validation and limits
 
-## Automated checks
+- Automated Python regression tests: **69 passed** (including metadata checks and audio-frequency tests).
+- User-provided historical ragtime MP3: ID3 software tag names **LAME 3.99.5**; AudioCheck reports **Encoded 2012 or later**. The record itself is much older; the tag describes a digital encoding.
+- User-provided EKT MPEG audio: encoder tag **Lavc57.10**, approximately 90 kbps VBR; broad-spectrum check found a **sharp high-frequency cutoff ~16 kHz**, consistent with MP3 filtering. A broadcast scan line can coexist with codec filtering.
+- Synthetic test: gradual low-pass filter around 15 kHz is classified as limited/filtered bandwidth, without claiming it must be radio.
+- Synthetic test: full-band noise remains wide-band. Noise at high frequencies (including record hiss/crackle) does *not* demonstrate that music was recorded digitally.
+- Synthetic test: reduced original sample rate is correctly called out as a sampling-rate limit.
+- Synthetic metadata tests: encoded-date tag is recognized, a song's recording-year tag is not confused with file creation, and contradictory encoding years are flagged.
+- All existing vinyl, power-hum, broadcast, NDR, stereo, failure-handling, sorting and uploaded-file reset tests are retained.
 
-58 tests passed in the development container (including synthetic 33 1/3, 45 and 78 RPM clicks; musical-drum false positive controls; real 50/60 Hz-style interference injected into synthetic music; TV/FM tones; NDR notch screening; browser-state upload clearing; result-card sorting; and missing-data resilience).
+**Not established:** A spectral cutoff cannot uniquely distinguish FM, cassette, or MP3; the LAME release date gives only a possible *lower bound* for encoding. Encoder and creation tags can be edited, and some programs or transfers overwrite them. Original creation dates of YouTube videos are not recoverable from their transcoded audio streams. File-system timestamps on temporary uploads are intentionally ignored.
 
-## User-provided real audio checks
-
-**Tony Parenti's Ragtimers - Hysterics Rag**: 168.3-second MP3; 75 seconds sampled. Results: Likely Vinyl / Record (High); Disc crackle found (High); a weaker 45 RPM click-pattern guess (Tentative); possible 50 Hz interference (Tentative). The original disc's speed was not independently verified. This is not an accuracy claim for the 45 RPM guess.
-
-**Everyone Knows That (EKT) sample**: 17.3-second MP3/MPEG. Results: a strong NTSC-type television frequency near 15,734 Hz; tentative 60 Hz electrical clue; no clear record-click signature. The 15,734 Hz detection does not prove the original studio's country.
-
-## New UI tests
-
-- All ten relevant checks produce cards even if some results are missing.
-- Positive results sort first by measured strength, then grey non-findings.
-- A normal successful file upload increments the file-picker key, clearing the chosen file on rerun while preserving the report.
-- Untrusted filenames/results are HTML escaped.
-- A static responsive layout was rendered for desktop and mobile. Full Streamlit Cloud deployment was not tested here.
-
-## Limits
-
-- Highly rhythmic percussion can mimic repeating groove clicks; tentative RPM guesses may be wrong.
-- Crackle may be from shellac, vinyl, an earlier disc transfer, or other audio damage.
-- Electrical hum and TV tones can enter during recording, copying, broadcast, or digitization.
-- Short MP3s may discard high-frequency broadcast tones.
-- YouTube retrieval can fail due to third-party access restrictions.
-
-These are exploratory clues, not reliable source-identification probabilities.
+The complete Streamlit browser interface still requires confirmation on the live deployment. Automated tests exercise the analysis and display helper logic, not real Streamlit Cloud browser sessions.
