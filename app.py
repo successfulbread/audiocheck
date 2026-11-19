@@ -1,4 +1,4 @@
-"""AudioCheck v1.6 - dark page, bright evidence and technical explanations."""
+"""AudioCheQ v1.8 - standard two-step upload and legible high-contrast buttons."""
 from __future__ import annotations
 
 import html
@@ -11,7 +11,7 @@ import streamlit as st
 from analyzer import MAX_BYTES, analyze, analyze_path
 from archive_source import fetch_archive_audio
 
-st.set_page_config(page_title="AudioCheck | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="AudioCheQ | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -63,10 +63,45 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-evidence img {width:100%;height:auto;display:block;border-radius:8px;}
 .ac-evidence figcaption {font-size:.8rem;color:#34455E;margin:9px 2px 0;line-height:1.48;}
 .ac-foot {font-size:.78rem;color:#AFBED1;margin-top:16px;}
-/* Keep Streamlit's dark-native upload and tab controls readable */
-.stTabs [data-baseweb="tab"] {color:#D5DEF2;}
-.stTabs [aria-selected="true"] {color:#FFFFFF;}
-[data-testid="stFileUploader"] {border-radius:14px;}
+/* Standard native Streamlit file picker: keep all clickable text readable on dark. */
+.stTabs [data-baseweb="tab"] {color:#E4EBFF !important;font-weight:800 !important;}
+.stTabs [aria-selected="true"] {color:#FFF1AC !important;}
+[data-testid="stFileUploader"] {border:2px solid #67E5E0 !important;border-radius:16px;
+ background:#24354F !important;padding:13px 14px 7px;}
+[data-testid="stFileUploader"] label,
+[data-testid="stFileUploader"] label p,
+[data-testid="stFileUploader"] small,
+[data-testid="stFileUploader"] span,
+[data-testid="stFileUploader"] [data-testid="stFileDropzoneInstructions"] {color:#F8FBFF !important;opacity:1 !important;}
+[data-testid="stFileUploader"] section {background:#263C58 !important;border:1.5px dashed #8BDCF2 !important;}
+[data-testid="stFileUploader"] button,
+[data-testid="stFileUploader"] [data-testid="baseButton-secondary"] {background:#FFF0AC !important;
+ color:#182437 !important;border:2px solid #F7D659 !important;opacity:1 !important;
+ font-weight:900 !important;min-height:46px;box-shadow:0 2px 0 #0003;}
+[data-testid="stFileUploader"] button *,
+[data-testid="stFileUploader"] button p,
+[data-testid="stFileUploader"] button span {color:#182437 !important;opacity:1 !important;}
+[data-testid="stFileUploader"] button:hover {background:#FFFFFF !important;}
+[data-testid="stButton"] button[kind="primary"],
+[data-testid="stBaseButton-primary"] {background:#46E7D0 !important;color:#10223A !important;
+ border:2px solid #A4FFF2 !important;font-weight:900 !important;
+ min-height:53px !important;border-radius:12px !important;opacity:1 !important;}
+[data-testid="stButton"] button[kind="primary"] *,
+[data-testid="stBaseButton-primary"] * {color:#10223A !important;opacity:1 !important;}
+[data-testid="stButton"] button[kind="primary"]:hover,
+[data-testid="stBaseButton-primary"]:hover {background:#B5FFF0 !important;}
+[data-testid="stButton"] button:disabled {background:#52647A !important;color:#ECF2F8 !important;
+ border-color:#61778B !important;opacity:1 !important;}
+[data-testid="stButton"] button:disabled * {color:#ECF2F8 !important;opacity:1 !important;}
+[data-testid="stFormSubmitButton"] button {background:#CBB7FF !important;color:#1E1B36 !important;
+ border:2px solid #E8E0FF !important;font-weight:900 !important;min-height:46px !important;}
+[data-testid="stFormSubmitButton"] button * {color:#1E1B36 !important;opacity:1 !important;}
+/* File state label above the primary action. */
+.ac-step {font-size:.99rem;font-weight:850;color:#FFFFFF;margin:9px 0 9px;}
+.ac-file-ready {background:#173F47;border:1px solid #61EACD;border-radius:12px;
+ padding:11px 14px;color:#ECFFF8;font-weight:750;margin:11px 0 13px;
+ overflow-wrap:anywhere;}
+.ac-file-waiting {font-size:.85rem;color:#C7D2E8;margin:11px 0 13px;}
 @media(max-width:675px){.ac-grid{grid-template-columns:1fr;gap:11px;}
  .ac-hero{padding:21px 18px}.ac-hero-mark{width:110px;right:2px;top:2px;opacity:.28;}
  .block-container{padding-top:.55rem}.ac-card{padding:14px 15px 12px;}.ac-top{margin-bottom:8px;}}
@@ -79,7 +114,7 @@ st.markdown('''<div class="ac-hero">
  <path d="M12 48V37M30 65V20M48 77V11M66 60V29M84 83V7M102 58V32M120 72V17M138 54V38"/>
  </g>
 </svg>
-<div class="ac-brand">Audio<span>Check</span></div>
+<div class="ac-brand">Audio<span>CheQ</span></div>
 <p class="ac-intro">Discover clues to a song's source, record speed, broadcast signals and digital file history.</p></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
@@ -208,6 +243,8 @@ def why(key, item):
         return note
 
     if key == "Likely audio source":
+        if item.get("fallback_guess"):
+            return "No reliable source-specific clue was measured. Digital is a placeholder best guess, NOT evidence that the original recording was digital. A clean tape or record can sound the same."
         return "The source estimate combines clicks, surface noise, tape interruptions, broadcast tones and bandwidth. The score ranks clues; it is not a calibrated probability."
     if key == "Vinyl rotation":
         rpm = re.search(r"(33[⅓ ]*|45|78)\s*RPM", raw, re.I)
@@ -347,17 +384,35 @@ def sorted_findings(rows):
 st.markdown('<div class="ac-heading">Check a song</div>', unsafe_allow_html=True)
 file_tab, archive_tab = st.tabs(["Upload audio", "Archive.org link"])
 with file_tab:
-    with st.form("upload_form", enter_to_submit=False, clear_on_submit=False):
-        uploaded = st.file_uploader("Choose a file (up to 5 minutes)",
-                                    type=["mp3", "mpeg", "mpga", "wav", "flac", "ogg", "m4a"],
-                                    accept_multiple_files=False, max_upload_size=100,
-                                    key=f"audio_file_{st.session_state.upload_nonce}")
-        pressed = st.form_submit_button("Analyze recording", type="primary", use_container_width=True)
-    if pressed:
+    # Regular Streamlit uploader OUTSIDE a form: the selected filename appears
+    # as soon as the browser has successfully delivered the file to Streamlit.
+    st.markdown('<div class="ac-step">1. Choose an audio file</div>', unsafe_allow_html=True)
+    uploaded = st.file_uploader(
+        "Select MP3, WAV, FLAC, M4A or OGG (max 5 minutes / 100 MB)",
+        type=["mp3", "mpeg", "mpga", "wav", "flac", "ogg", "m4a"],
+        accept_multiple_files=False,
+        max_upload_size=100,
+        key=f"audio_file_{st.session_state.upload_nonce}",
+        help="Pick one file. Its name appears below when it has reached the app.",
+    )
+    if uploaded is not None:
+        ready_name = html.escape(Path(uploaded.name).name)
+        ready_mb = uploaded.size / (1024 * 1024)
+        st.markdown(
+            f'<div class="ac-file-ready">&#10003; File received: {ready_name} '
+            f'({ready_mb:.1f} MB)</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="ac-file-waiting">Your selected filename will appear here. '
+            'Then press Analyze.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ac-step">2. Analyze</div>', unsafe_allow_html=True)
+    pressed = st.button(
+        "ANALYZE SELECTED AUDIO", key="analyze_upload", type="primary",
+        use_container_width=True, disabled=uploaded is None,
+    )
+    if pressed and uploaded is not None:
         st.session_state.report_error = None
-        if uploaded is None:
-            st.session_state.report_error = "Choose a file first."
-        elif uploaded.size > MAX_BYTES:
+        if uploaded.size > MAX_BYTES:
             st.session_state.report_error = "File too large (100 MB max)."
         else:
             try:
@@ -365,7 +420,7 @@ with file_tab:
                     name = Path(uploaded.name).name
                     rows, meta = analyze(uploaded.getvalue(), name, charts=True)
                 store_report(rows, meta, name, "Upload")
-                # A new widget key removes the finished file from the upload bar.
+                # Incrementing the key drops the previous browser selection.
                 st.session_state.upload_nonce += 1
                 st.rerun()
             except ValueError as exc:

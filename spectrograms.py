@@ -85,15 +85,17 @@ def _plot_panel(fig, ax, f, t, db, low, high, guides, title, show_xlabel=True):
     # Plot the actual dB matrix; colour mapping only adjusts its display range.
     ax.pcolormesh(t, f[mask], band, shading='nearest', cmap='inferno',
                   vmin=low_db, vmax=high_db, rasterized=True)
-    for hz, label in guides:
-        if low <= hz <= high:
-            # A two-layer guide stays visible on yellow AND dark parts of the plot.
-            ax.axhline(hz, lw=2.8, color='#04070C', alpha=.75)
-            ax.axhline(hz, lw=1.3, ls=(0,(4,4)), color=GUIDE, alpha=.95)
-            ax.annotate(label, (t[0], hz), xytext=(5, 3), textcoords='offset points',
-                        va='bottom', fontsize=9.0, weight='bold', color='#D5FFF9',
-                        bbox={'boxstyle':'round,pad=.18','facecolor':'#091A2D',
-                              'edgecolor':'none','alpha':.88})
+    # Reference positions belong in the margin, not on the spectrogram:
+    # a dashed full-width guide could hide or imitate the very tone being tested.
+    reference = [(hz, label) for hz, label in guides if low <= hz <= high]
+    if reference:
+        right_axis = ax.secondary_yaxis('right')
+        right_axis.set_yticks([hz for hz, _ in reference],
+                             labels=[f'{label} ref' for _, label in reference])
+        right_axis.tick_params(axis='y', which='major', colors='#007C88',
+                               length=6, width=1.6, labelsize=8, pad=6)
+        right_axis.spines['right'].set_color('#007C88')
+        right_axis.spines['right'].set_linewidth(1.5)
     ax.set_ylim(low, high)
     ax.set_xlim(t[0]-.5, t[-1]+.5) if len(t)==1 else ax.set_xlim(t[0], t[-1])
     ax.set_title(title, fontsize=11, fontweight='bold', color=INK, loc='left', pad=7)
@@ -157,11 +159,11 @@ def render_evidence(audio, kind, start_seconds=0.0, original_rate=44100, target=
         axes = fig.subplots(nrows=2, ncols=1)
         for i, (ax,(lo,hi,guides,title)) in enumerate(zip(axes,ranges)):
             _plot_panel(fig,ax,f,t,db,lo,hi,guides,title,show_xlabel=(i==len(ranges)-1))
-        fig.subplots_adjust(left=.12,right=.97,top=.91,bottom=.12,hspace=.38)
+        fig.subplots_adjust(left=.12,right=.79,top=.91,bottom=.12,hspace=.38)
     else:
         fig = Figure(figsize=(8.6,4.45), dpi=115, facecolor=PAPER)
         gs = fig.add_gridspec(2,1,height_ratios=[2.35,1],hspace=.52,
-                              left=.12,right=.97,top=.89,bottom=.16)
+                              left=.12,right=.80,top=.89,bottom=.19)
         ax = fig.add_subplot(gs[0]); profile = fig.add_subplot(gs[1])
         lo,hi,guides,title = ranges[0]
         _plot_panel(fig,ax,f,t,db,lo,hi,guides,title,show_xlabel=False)
@@ -170,8 +172,14 @@ def render_evidence(audio, kind, start_seconds=0.0, original_rate=44100, target=
         # a positive peak (TV / FM) or negative notch (NDR).
         median_db = np.median(db[band],axis=1)
         profile.plot(f[band],median_db, color='#F0A000',lw=2.1)
-        for hz,label in guides:
-            profile.axvline(hz, ls=(0,(4,4)),color=GUIDE,lw=1,alpha=.9)
+        # The profile has reference tick labels beneath the curve, not
+        # vertical lines that could visually manufacture a spectral peak.
+        tick_values = sorted(set([lo, hi] + [hz for hz, _ in guides]))
+        profile.set_xticks(tick_values)
+        profile.set_xticklabels([f'{hz:,.0f}' for hz in tick_values])
+        for tick, hz in zip(profile.get_xticklabels(), tick_values):
+            tick.set_color('#007C88' if any(abs(hz-g)<1e-6 for g,_ in guides) else MUTED)
+            tick.set_fontweight('bold' if any(abs(hz-g)<1e-6 for g,_ in guides) else 'normal')
         profile.set_xlim(lo,hi)
         profile.set_ylabel('Level (dB)',fontsize=9,color=MUTED)
         profile.set_xlabel('Frequency (Hz)',fontsize=9,color=MUTED)
@@ -182,7 +190,7 @@ def render_evidence(audio, kind, start_seconds=0.0, original_rate=44100, target=
     cap = f'Real audio: {start_seconds:.0f}-{start_seconds+duration:.0f}s · {channel}. '
     cap += ('Bright streak = sound at that frequency. '
             if kind != 'ndr' else 'A dark horizontal gap near 10 kHz would be the notch. ')
-    cap += 'Yellow/orange = stronger; dark purple/black = weaker. Dashed = guide only (turquoise), not proof of detection.'
+    cap += 'Yellow/orange = stronger; dark purple/black = weaker. Turquoise reference ticks are outside the signal plot, not detected lines.'
     return {'png':_figure_bytes(fig), 'caption':cap,
             'section_start_s':float(start_seconds),'section_duration_s':float(duration),
             'channel':channel,'kind':kind}

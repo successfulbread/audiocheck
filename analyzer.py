@@ -928,11 +928,17 @@ def _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, meta, s
         add('Digital source', 1.4,
             'The sound reaches high frequencies and no distinctive disc, tape or radio artifact stood out. Even clean analog transfers can do this too.')
 
-    if max(added.values()) < 1.0:
-        return {'result': 'Source uncertain', 'certainty': 'Not measurable',
-                'detail': 'There are no distinctive clues to choose record, tape, radio or digital source.',
-                'evidence': facts or ['No distinctive source artifact was found.'],
-                'guess_percent': None, 'alternative': None}
+    if max(added.values()) <= 0.0:
+        # A source *guess* is requested even when evidence is uninformative.
+        # Never present this default as a positive digital detection or attach
+        # a made-up probability: the source of clean analog transfers is often
+        # unknowable from this file alone.
+        facts.append('No characteristic record pops, tape dropouts, or FM pilot provided a usable source match.')
+        facts.append('Digital is the default low-confidence guess only; a clean record or tape copy could look identical.')
+        return {'result': 'Best guess: Digital source', 'certainty': 'Tentative',
+                'detail': 'No source-specific signature was found. Digital is only a fallback guess, not a measured origin.',
+                'evidence': facts, 'guess_percent': None,
+                'alternative': 'Vinyl / Record or Cassette / Tape', 'fallback_guess': True}
 
     winner = max(scores, key=scores.get)
     pct = round(100 * scores[winner] / (sum(scores.values()) + 0.8))
