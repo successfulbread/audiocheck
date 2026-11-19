@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -589,14 +590,15 @@ def _consolidate_electrical(windows):
         elif rich>=1 or mixed>=2: level=2
         elif mixed>=1 or singles>=2: level=1
         elif singles>=1 or weak>=2: level=.5
+        elif weak>=1: level=.25  # one persistent, weak harmonic: tentative guess only
         else: level=0
         freqs=[float(f) for item in sections for _,f in item['freqs']]
         candidates.append({'base':base,'level':level,'total':total,'strength':strength,'freqs':freqs})
     ranked=sorted(candidates,key=lambda c:(c['level'],c['total'],c['strength']),reverse=True)
     top,rival=ranked
     if top['level']==0:
-        return verdict('No clear mains hum','Not detected',
-            'No sufficiently persistent narrowband 50/60 Hz line or harmonics were found.')
+        return verdict('Uncertain', 'Unclear',
+            'Neither 50 Hz nor 60 Hz showed a persistent narrow tone. No regional guess is supported.')
     base=top['base']
     ambiguous=(rival['level']>0 and top['level']-rival['level']<1
                and top['total']<=rival['total']+2)
@@ -604,9 +606,9 @@ def _consolidate_electrical(windows):
         # A stronger *stable fundamental* is meaningful even without harmonics.
         # Tie-breaking is speculative, so label as tentative rather than certain.
         if top['strength'] < rival['strength']*1.20:
-            return verdict('Possible 50/60 Hz interference','Tentative',
-                 'Both mains-frequency families show similar weak spectral lines. '
-                 'The peaks could also be sustained musical notes, so no particular region is justified.')
+            return verdict('Uncertain', 'Unclear',
+                 'Both 50 Hz and 60 Hz had similar weak peaks, which might be musical notes. '
+                 'There is no reliable reason to choose one.')
     region='50 Hz region (Europe and others)' if base==50 else '60 Hz region (N. America and others)'
     certainty='Strong' if top['level']>=3 and rival['level']==0 else ('Possible' if top['level']>=2 and not ambiguous else 'Tentative')
     examples=', '.join(f'{f:.1f}' for f in list(dict.fromkeys(top['freqs']))[:5])
@@ -616,7 +618,7 @@ def _consolidate_electrical(windows):
     else:
         detail=(f'Persistent frequency bands are compatible with {base} Hz power. ')
     detail+=f'Detected peaks include {examples} Hz. '
-    if top['level']<2: detail+='Only a weak or isolated tone was supported, not a full harmonic family. '
+    if top['level']<2: detail+='This is a weak or isolated tone, not a confirmed electrical-hum pattern. '
     detail+='This indicates possible electrical interference somewhere in the recording chain, not the studio country.'
     return verdict(('Possible ' if certainty=='Tentative' else 'Likely ')+region,certainty,detail)
 
@@ -841,16 +843,15 @@ def _bandwidth_verdict(windows, metadata, broadcast):
         f'Audio/noise energy was measured up to around {cutoff:g} kHz. This alone cannot identify a format.')
 
 
-def _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, meta):
-    """Fun source ranking from *independent* measurable clues.
+def _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, meta, stereo=None):
+    """Rank source *clues*, not original-provenance probabilities.
 
-    Percentages are heuristic shares of evidence weight, NOT estimated odds or
-    calibrated model probabilities. A vinyl disc may have been copied to tape,
-    radio or digital, so these source categories can coexist in reality.
+    A digital file may contain a record, tape or broadcast transfer. AM radio
+    has no equivalent of the FM 19 kHz pilot; its guess is necessarily weak.
     """
-    scores = {"Vinyl / Record": 0.35, "Cassette / Tape": 0.35,
-              "FM radio": 0.35, "Digital original": 0.35}
-    added = {name: 0.0 for name in scores}
+    labels = ('Vinyl / Record', 'Cassette / Tape', 'FM radio', 'AM radio', 'Digital source')
+    scores = {name: 0.25 for name in labels}
+    added = {name: 0.0 for name in labels}
     facts = []
 
     def add(label, points, fact):
@@ -858,92 +859,102 @@ def _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, meta):
         scores[label] += points
         facts.append(fact)
 
-    sr = str(surface.get("result", "")).lower()
-    rot = str(rotation.get("result", ""))
-    br = str(broadcast.get("result", ""))
-    bw = str(bandwidth.get("result", ""))
-    disc_weight = {"High": 6.5, "Strong": 6.5, "Possible": 3.7, "Tentative": 1.7}
-    if "crackle" in sr and surface.get("certainty") in disc_weight:
-        n = disc_weight[surface["certainty"]]
-        add("Vinyl / Record", n,
-            "Irregular pops and crackle were heard, including between musical sounds. "
-            "That fits a record transfer (vinyl or older shellac).")
-    if "rpm" in rot.lower() and rotation.get("certainty") in disc_weight:
-        n = {"High": 5.5, "Strong": 5.5, "Possible": 3.0, "Tentative": 1.2}[rotation["certainty"]]
-        import re
-        rpm_match = re.search(r"(33[\u2153]|45|78)\s*RPM",rot,re.I)
-        label = rpm_match.group(0) if rpm_match else "record rotation"
-        add("Vinyl / Record", n,
-            f"Some clicks repeat at about the timing expected for {label}. "
-            "Music can sometimes imitate repeating clicks.")
-    if "FM radio pilot" in br and broadcast.get("certainty") in disc_weight:
-        weight = {"High": 7.5, "Strong": 7.5, "Possible": 5.0, "Tentative": 2.5}[broadcast["certainty"]]
-        add("FM radio", weight,
-            "A narrow 19 kHz tone matches the FM stereo pilot found in radio broadcasts.")
-    if "NTSC" in br or "PAL" in br or "SECAM" in br:
-        facts.append("A TV scanning tone was detected, but this can enter during a later transfer; "
-                     "it does not tell us whether the source was cassette, record or radio.")
-    if ndr.get("certainty") in ("Possible", "Tentative"):
-        add("FM radio", 0.6,
-            "There is a dip near 10 kHz like some historic NDR radio transfers, "
-            "but other filters can produce this too.")
-    import re
-    m = re.search(r"(\d+)", str(dropout.get("result", "")))
+    sr = str(surface.get('result', '')).lower()
+    rot = str(rotation.get('result', ''))
+    br = str(broadcast.get('result', ''))
+    bw = str(bandwidth.get('result', ''))
+    disc_weight = {'High': 6.5, 'Strong': 6.5, 'Possible': 3.7, 'Tentative': 1.7}
+    if 'crackle' in sr and surface.get('certainty') in disc_weight:
+        add('Vinyl / Record', disc_weight[surface['certainty']],
+            'Sharp, irregular pops and crackle appear between musical sounds: a record-transfer clue.')
+    if 'rpm' in rot.lower() and rotation.get('certainty') in disc_weight:
+        strength = {'High': 5.5, 'Strong': 5.5, 'Possible': 3.0, 'Tentative': 1.2}
+        rpm_match = re.search(r'(33[\u2153]|45|78)\s*RPM', rot, re.I)
+        rpm_label = rpm_match.group(0) if rpm_match else 'record speed'
+        add('Vinyl / Record', strength[rotation['certainty']],
+            f'Sharp clicks repeat at about {rpm_label} timing; percussion can imitate this.')
+    if 'FM radio pilot' in br and broadcast.get('certainty') in disc_weight:
+        weight = {'High': 7.5, 'Strong': 7.5, 'Possible': 5.0, 'Tentative': 2.5}
+        add('FM radio', weight[broadcast['certainty']],
+            'A narrow 19 kHz pilot tone fits a stereo FM broadcast.')
+    if any(k in br for k in ('NTSC', 'PAL', 'SECAM')):
+        facts.append('A TV scanning tone was found. It may be from recording or later copying, not necessarily radio.')
+    if ndr.get('certainty') in ('Possible', 'Tentative'):
+        add('FM radio', 0.6,
+            'A dip near 10 kHz resembles an old NDR radio-transfer clue, but is not unique to radio.')
+
+    m = re.search(r'(\d+)', str(dropout.get('result', '')))
     drops = int(m.group(1)) if m else 0
     if drops >= 2:
-        add("Cassette / Tape", min(2.5, 1.0 + 0.22*drops),
-            f"{drops} brief sound dropouts were found. Tape damage is one explanation; "
-            "digital glitches can also cause them.")
-    if "FM-like cutoff" in bw:
-        add("FM radio", 1.2,
-            "The high frequencies cut off near the FM broadcast range. "
-            "Digital compression can cause a similar cutoff.")
-    elif "Limited highs" in bw or "Narrow range" in bw:
-        facts.append("The recording loses high-frequency sound, which can happen with "
-                     "tape, radio, filtering or compressed audio.")
-    elif "MP3-like cutoff" in bw:
-        facts.append("The high-frequency cutoff fits the file's MP3 compression. "
-                     "That does not reveal the original recording medium.")
-    elif "Wide range" in bw:
-        facts.append("Wide frequency range was measured, but record noise can also extend high; "
-                     "this does not prove a digital original.")
+        add('Cassette / Tape', min(3.6, 1.0 + 0.32*drops),
+            f'{drops} brief dropouts could point to damaged tape; digital glitches are another possibility.')
 
-    # A clean, wide-band recording *can* have a digital source. This is only a
-    # weak fallback, since well-transferred analog recordings can sound clean.
-    if max(added.values()) < 1.0 and "Wide range" in bw and drops == 0:
-        add("Digital original", 1.4,
-            "No clear disc, tape or FM artifacts stood out, and the frequency range is wide. "
-            "That is compatible with digital audio, but clean analog transfers also fit.")
+    if 'FM-like cutoff' in bw:
+        add('FM radio', 1.7,
+            'High frequencies stop near 15 kHz, which fits FM broadcasting but can also be compression.')
+    elif 'Sharp cutoff' in bw:
+        facts.append('A sharp high-frequency cutoff could be FM transmission or digital filtering.')
+    elif 'Limited highs' in bw:
+        facts.append('Weak high frequencies can result from tape, radio or digital filtering.')
+    elif 'MP3-like cutoff' in bw:
+        facts.append('The high-frequency limit may come from MP3 encoding; MP3 alone does not identify the original source.')
+    elif 'Wide range' in bw:
+        facts.append('Wide frequency range was measured; record hiss can extend high too.')
+
+    # AM mono broadcasts usually have restricted bandwidth, but similar
+    # cutoffs occur with old tape, telephone and low-bitrate compression.
+    # Never use the current MP3 codec as evidence of an *original* digital source.
+    narrow = re.search(r'Narrow range \(\s*~([0-9.]+) kHz\)', bw)
+    cutoff = float(narrow.group(1)) if narrow else None
+    channels = meta.get('channels')
+    stereo_name = str((stereo or {}).get('result', '')).lower()
+    mono = channels == 1 or stereo_name in ('mono', 'dual mono / near-mono')
+    bitrate = (meta.get('file_history') or {}).get('facts', {}).get('bitrate_kbps')
+    low_bitrate = meta.get('codec') in ('mp3', 'aac', 'opus') and isinstance(bitrate, (int,float)) and bitrate <= 112
+    input_rate = meta.get('input_rate')
+    sample_limited = not isinstance(input_rate, (int,float)) or input_rate < 22050
+    if cutoff is not None and cutoff <= 9.0 and not sample_limited:
+        if low_bitrate:
+            facts.append('The narrow audio range could come from low-bitrate encoding, so AM radio is not a firm guess.')
+        elif mono:
+            add('AM radio', 2.4 if cutoff <= 7.5 else 1.6,
+                f'Audio fades above about {cutoff:g} kHz and is mono, as AM broadcasts often are. Old tape and filters can sound similar.')
+        else:
+            facts.append(f'Audio cuts off near {cutoff:g} kHz; AM is possible, but no mono/broadcast clue supports it.')
+
+    # A clean wide-band file with no identifiable analog/broadcast artifacts
+    # supports a *possible* digital source, not proof it was digitally recorded.
+    if max(added.values()) < 1.0 and 'Wide range' in bw and drops == 0:
+        add('Digital source', 1.4,
+            'The sound reaches high frequencies and no distinctive disc, tape or radio artifact stood out. Even clean analog transfers can do this too.')
 
     if max(added.values()) < 1.0:
-        return {"result": "Source not clear", "certainty": "Not measurable",
-                "detail": "No distinctive record, cassette or FM signal was strong enough for a useful source guess.",
-                "evidence": facts or ["No distinctive source-specific artifact stood out."],
-                "guess_percent": None, "alternative": None}
+        return {'result': 'Source uncertain', 'certainty': 'Not measurable',
+                'detail': 'There are no distinctive clues to choose record, tape, radio or digital source.',
+                'evidence': facts or ['No distinctive source artifact was found.'],
+                'guess_percent': None, 'alternative': None}
 
-    winner = max(scores, key=lambda k: scores[k])
-    # A non-calibrated, purely comparative indicator. Keep 0.8 for "unknown".
-    unknown_weight = 0.8
-    pct = round(100 * scores[winner] / (sum(scores.values()) + unknown_weight))
-    if winner == "Vinyl / Record":
-        label = "Likely Vinyl / Record"
-    elif winner == "Cassette / Tape":
-        label = "Likely Cassette / Tape" if added[winner] >= 2.0 else "Possible Cassette / Tape"
-    elif winner == "FM radio":
-        label = "Likely FM Radio" if added[winner] >= 2.4 else "Possible Radio Transfer"
+    winner = max(scores, key=scores.get)
+    pct = round(100 * scores[winner] / (sum(scores.values()) + 0.8))
+    points = added[winner]
+    if winner == 'Vinyl / Record':
+        label = 'Likely Vinyl / Record' if points >= 2.5 else 'Possible Vinyl / Record'
+    elif winner == 'Cassette / Tape':
+        label = 'Likely Cassette / Tape' if points >= 2.5 else 'Possible Cassette / Tape'
+    elif winner == 'FM radio':
+        label = 'Likely FM Radio' if points >= 2.4 else 'Possible FM Radio'
+    elif winner == 'AM radio':
+        label = 'Possible AM Radio'  # bandwidth + mono are never definitive
     else:
-        label = "Possible Digital Source"
-    if winner == "Vinyl / Record" and added[winner] < 2.5:
-        label = "Possible Vinyl / Record"
-    strength = ("High" if added[winner] >= 6.0 and pct >= 64 else
-                "Possible" if added[winner] >= 2.4 else "Tentative")
-    other = sorted(((k,v) for k,v in scores.items() if k != winner), key=lambda kv:kv[1],reverse=True)
-    alternative = other[0][0] if other else None
-    facts.append("These percentages are fun clue rankings, not proven probabilities; "
-                 "a record can also be copied onto cassette or broadcast on radio.")
-    return {"result": label, "certainty": strength,
-            "detail": " ".join(facts), "evidence": facts,
-            "guess_percent": pct, "alternative": alternative}
+        label = 'Possible Digital Source'
+    strength = ('High' if points >= 6.0 and pct >= 64 else
+                'Possible' if points >= 2.3 else 'Tentative')
+    other = sorted(((k, v) for k,v in scores.items() if k != winner),
+                   key=lambda kv: kv[1], reverse=True)
+    facts.append('Clue scores are rough comparisons, not true odds; one recording may pass through several media.')
+    return {'result': label, 'certainty': strength,
+            'detail': ' '.join(facts), 'evidence': facts,
+            'guess_percent': pct, 'alternative': other[0][0] if other else None}
 
 
 def _diagnostics(windows):
@@ -1003,11 +1014,10 @@ def analyze_path(path, file_name=None):
                        'Short losses in sound; not specific to tape.')
                if interruption_count else verdict('None found', 'Not detected', 'No brief interruptions.'))
     bandwidth = _bandwidth_verdict(analyzed, metadata, broadcast)
-    source = _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, metadata)
-    # The frequency response is evidence for the source guess, not a separate
-    # independent conclusion. Keep the measured facts in the origin card.
-    source["frequency_clue"] = bandwidth
     stereo = _stereo_format(analyzed, metadata['channels'])
+    source = _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, metadata, stereo)
+    # The frequency response supports the source guess, not an independent origin.
+    source["frequency_clue"] = bandwidth
     rows=[
         ('Likely audio source',source),
         ('Vinyl rotation',rotation),

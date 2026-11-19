@@ -120,7 +120,7 @@ def display_result(key, item):
         if key == "Vinyl rotation":
             return "No RPM clue"
         if key == "Likely power system":
-            return "No power clue"
+            return "Uncertain"
         if key == "Radio / TV signals":
             return "No signal found"
         if key == "NDR-style 10 kHz dip":
@@ -165,8 +165,10 @@ def display_result(key, item):
 
 def why(key, item):
     if not meaningful(item):
+        if key == "Likely power system" and isinstance(item, dict):
+            return str(item.get("detail") or "No usable 50/60 Hz hum was found.")[:210]
         return {
-            "Likely audio source": "No distinctive record, tape or FM signal stood out. Clean recordings can sound alike.",
+            "Likely audio source": "No reliable clue separated vinyl, cassette, FM, AM or digital recordings.",
             "Vinyl rotation": "No repeating pops reliably matched 33 1/3, 45 or 78 RPM.",
             "Likely power system": "No steady 50 or 60 Hz electrical hum stood out.",
             "Radio / TV signals": "No convincing old TV scan tone or FM pilot tone was found.",
@@ -193,7 +195,7 @@ def why(key, item):
         freq = "50" if "50 Hz" in raw else "60" if "60 Hz" in raw else None
         if freq:
             return f"A steady line near {freq} Hz may be electrical hum from recording or copying equipment."
-        return "Weak peaks suggest possible electrical noise, but the region is uncertain."
+        return (detail[:200] if detail else "Weak peaks do not clearly favour 50 or 60 Hz.")
     if key == "Radio / TV signals":
         if "NTSC" in raw:
             return "A narrow tone near 15,734 Hz matches older NTSC TV equipment."
@@ -281,7 +283,11 @@ def summary(found):
     elif "cassette" in raw:
         statements.append("Tape-like dropouts suggest a cassette copy.")
     elif "fm radio" in raw:
-        statements.append("An FM pilot suggests a radio recording.")
+        statements.append("An FM pilot or cutoff suggests a radio recording.")
+    elif "am radio" in raw:
+        statements.append("Narrow mono audio may come from AM radio.")
+    elif "digital" in raw:
+        statements.append("A clean, wide-range signal may be digital.")
     else:
         statements.append("The source is hard to distinguish.")
     if meaningful(found.get("NDR-style 10 kHz dip")):
