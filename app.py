@@ -1,4 +1,4 @@
-"""AudioCheck v1.5 - colour refresh and measured spectral evidence."""
+"""AudioCheck v1.6 - dark page, bright evidence and technical explanations."""
 from __future__ import annotations
 
 import html
@@ -9,70 +9,78 @@ import tempfile
 import streamlit as st
 
 from analyzer import MAX_BYTES, analyze, analyze_path
-from youtube_source import download_youtube_audio
 from archive_source import fetch_archive_audio
 
 st.set_page_config(page_title="AudioCheck | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
-html,body,.stApp { font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif; }
-.stApp { background:#FCFCFF; color:#16233E; }
-.block-container { max-width:980px; padding-top:1.1rem; padding-bottom:3rem; }
+html, body, .stApp {font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;}
+.stApp {background:linear-gradient(165deg,#101827 0%,#151329 60%,#101827 100%);color:#F2F6FF;}
+.block-container {max-width:980px;padding-top:1.1rem;padding-bottom:3rem;}
 header[data-testid="stHeader"] {background:transparent;}
-.ac-hero {background:linear-gradient(118deg,#E7FFF7 0%,#EEF1FF 53%,#FFF0E7 100%);
-  border:1px solid #C5D6EF;border-radius:23px;box-shadow:0 7px 25px #425D8A12;padding:22px 26px;margin:0 0 18px;}
-.ac-brand {font-size:clamp(2.3rem,6vw,3.3rem);line-height:1.08;letter-spacing:-.055em;font-weight:900;
-  color:#182B56;margin:0 0 5px;}
-.ac-brand span {color:#A53BCD;}
-.ac-intro {font-size:1rem;color:#2C4771;margin:0;}
-.ac-heading {font-size:1.4rem;font-weight:850;color:#182E61;margin:16px 0 10px;}
-.ac-meta {font-size:.78rem;color:#647991;margin:-3px 0 15px;overflow-wrap:anywhere;}
-.ac-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:17px;}
-.ac-card {border:1.5px solid;border-radius:19px;padding:16px 17px 13px;min-width:0;
-  box-shadow:0 5px 16px #30519D0D;}
-.ac-card.strong {background:linear-gradient(135deg,#DDFBEC,#F2FFF9);border-color:#61CB9D;}
-.ac-card.good {background:linear-gradient(135deg,#E1F1FF,#F2FAFF);border-color:#79B6F3;}
-.ac-card.maybe {background:linear-gradient(135deg,#FFF0DC,#FFF9F0);border-color:#F3B266;}
-.ac-card.none {background:#F3F4F7;border-color:#D5DCE6;box-shadow:none;color:#788594;}
+.ac-hero {position:relative;overflow:hidden;background:linear-gradient(111deg,#4F46E5 0%,#9333EA 54%,#E34E83 100%);
+ border:1px solid #B9A3FF;border-radius:24px;box-shadow:0 16px 32px #03071355;padding:26px 29px;margin:0 0 20px;}
+.ac-brand {position:relative;z-index:1;font-size:clamp(2.3rem,6vw,3.4rem);line-height:1.09;letter-spacing:-.05em;
+ font-weight:900;color:#FFFFFF;margin:0 0 8px;text-shadow:0 2px 7px #25144755;}
+.ac-brand span {color:#FFE58F;}
+.ac-intro {position:relative;z-index:1;max-width:620px;font-size:1rem;color:#F9EEFF;margin:0;line-height:1.5;}
+.ac-hero-mark {position:absolute;right:20px;top:12px;width:155px;height:95px;opacity:.66;pointer-events:none;}
+.ac-heading {font-size:1.37rem;font-weight:850;color:#FFFFFF;margin:18px 0 12px;}
+.ac-meta {font-size:.82rem;color:#B7BED2;margin:-3px 0 15px;overflow-wrap:anywhere;}
+.ac-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin-bottom:17px;}
+.ac-card {border:1.7px solid;border-radius:19px;padding:16px 17px 13px;min-width:0;
+ box-shadow:0 9px 24px #00000031;}
+.ac-card.strong {background:linear-gradient(135deg,#D9FFED,#F2FFF8);border-color:#24CC89;}
+.ac-card.good {background:linear-gradient(135deg,#DCEEFF,#F2F8FF);border-color:#43A4FF;}
+.ac-card.maybe {background:linear-gradient(135deg,#FFF0CB,#FFF9EB);border-color:#F1A83B;}
+.ac-card.none {background:#293143;border-color:#515A70;box-shadow:none;color:#B4BCCB;}
 .ac-top {display:flex;align-items:center;gap:7px;margin-bottom:11px;}
-.ac-icon {font-size:1.14rem;line-height:1.2;flex:none;}
-.ac-label {font-size:.84rem;font-weight:800;color:#31496F;flex:1;}
-.ac-card.none .ac-label{color:#7A8793;}
-.ac-pill {border-radius:999px;font-size:.66rem;font-weight:800;padding:4px 8px;white-space:nowrap;}
-.ac-card.strong .ac-pill{background:#B7F0CF;color:#08683C;}
-.ac-card.good .ac-pill{background:#BADFFF;color:#164F94;}
-.ac-card.maybe .ac-pill{background:#FFE0A8;color:#81500A;}
-.ac-card.none .ac-pill{background:#E2E5EB;color:#697481;}
-.ac-sub{font-size:.78rem;font-weight:650;color:#4B647F;margin-top:7px;}
-.ac-result{font-size:1.22rem;line-height:1.3;font-weight:850;color:#142C57;overflow-wrap:anywhere;min-height:1.45em;}
-.ac-card.none .ac-result{font-size:1rem;color:#697785;}
-.ac-card.none .ac-sub{color:#788592;}
-.ac-card details{border-top:1px solid #AFC9D533;margin-top:12px;padding-top:8px;}
-.ac-card summary{font-size:.88rem;font-weight:800;color:#20599F;cursor:pointer;}
-.ac-card.none summary{color:#6D7C8B;}
-.ac-card details p{font-size:.88rem;line-height:1.5;color:#334A64;margin:8px 0 2px;}
-.ac-card details ul{margin:9px 0 0;padding-left:19px;}
-.ac-card details li{font-size:.88rem;line-height:1.5;color:#334A64;margin:5px 0;}
-.ac-card.none details p{color:#6D7B88;}
-.ac-card.has-spectrogram{grid-column:1 / -1;}
-.ac-evidence-intro{margin-top:13px;margin-bottom:7px;color:#384A6F;
-  font-weight:800;font-size:.8rem;}
-.ac-evidence{margin:8px 0 14px;padding:8px;background:#FFFFFF;
-  border:1px solid #C7D6E6;border-radius:12px;}
-.ac-evidence img{width:100%;height:auto;display:block;border-radius:7px;}
-.ac-evidence figcaption{font-size:.75rem;color:#4B5B70;margin:8px 2px 0;
-  line-height:1.45;}
-.ac-card details{overflow:hidden;}
-.ac-foot{font-size:.76rem;color:#6A7D91;margin-top:13px;}
-@media(max-width:675px){.ac-grid{grid-template-columns:1fr;gap:10px;}
-  .ac-hero{padding:20px 18px}.block-container{padding-top:.55rem;}
-  .ac-card{padding:14px 15px 12px;}.ac-top{margin-bottom:8px;}}
+.ac-icon {font-size:1.15rem;line-height:1.2;flex:none;}
+.ac-label {font-size:.85rem;font-weight:800;color:#243F60;flex:1;}
+.ac-card.none .ac-label{color:#CCD2DF;}
+.ac-pill {border-radius:999px;font-size:.68rem;font-weight:850;padding:5px 9px;white-space:nowrap;}
+.ac-card.strong .ac-pill {background:#A0EECC;color:#075C38;}
+.ac-card.good .ac-pill {background:#A9D6FF;color:#143E76;}
+.ac-card.maybe .ac-pill {background:#FFD998;color:#704306;}
+.ac-card.none .ac-pill {background:#465269;color:#E0E5EF;}
+.ac-sub {font-size:.8rem;font-weight:680;color:#415E79;margin-top:8px;}
+.ac-result {font-size:1.23rem;line-height:1.3;font-weight:850;color:#182F56;overflow-wrap:anywhere;min-height:1.4em;}
+.ac-card.none .ac-result {font-size:1.03rem;color:#E0E6F0;}
+.ac-card.none .ac-sub {color:#AEB9CA;}
+.ac-card details {border-top:1px solid #7482964A;margin-top:13px;padding-top:10px;overflow:hidden;}
+.ac-card summary {font-size:.9rem;font-weight:800;color:#1658A8;cursor:pointer;}
+.ac-card.none summary {color:#86B9FA;}
+.ac-card details p,.ac-card details li {font-size:.9rem;line-height:1.57;color:#293E57;}
+.ac-card details p {margin:10px 0 4px;}
+.ac-card details ul {margin:9px 0 0;padding-left:20px;}
+.ac-card details li {margin:6px 0;}
+.ac-card.none details p,.ac-card.none details li {color:#D5DCEA;}
+.ac-card.has-spectrogram {grid-column:1 / -1;}
+.ac-evidence-intro {margin-top:14px;margin-bottom:8px;color:#254C75;font-weight:850;font-size:.85rem;}
+.ac-card.none .ac-evidence-intro {color:#D8E3F6;}
+.ac-evidence {margin:10px 0 15px;padding:9px;background:#FFFFFF;border:1px solid #AFC5DD;border-radius:13px;}
+.ac-evidence img {width:100%;height:auto;display:block;border-radius:8px;}
+.ac-evidence figcaption {font-size:.8rem;color:#34455E;margin:9px 2px 0;line-height:1.48;}
+.ac-foot {font-size:.78rem;color:#AFBED1;margin-top:16px;}
+/* Keep Streamlit's dark-native upload and tab controls readable */
+.stTabs [data-baseweb="tab"] {color:#D5DEF2;}
+.stTabs [aria-selected="true"] {color:#FFFFFF;}
+[data-testid="stFileUploader"] {border-radius:14px;}
+@media(max-width:675px){.ac-grid{grid-template-columns:1fr;gap:11px;}
+ .ac-hero{padding:21px 18px}.ac-hero-mark{width:110px;right:2px;top:2px;opacity:.28;}
+ .block-container{padding-top:.55rem}.ac-card{padding:14px 15px 12px;}.ac-top{margin-bottom:8px;}}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('''<div class="ac-hero"><div class="ac-brand">Audio<span>Check</span></div>
-<p class="ac-intro">Upload a song to check its likely source, record speed, broadcast signals and digital file age.</p></div>''', unsafe_allow_html=True)
+st.markdown('''<div class="ac-hero">
+<svg class="ac-hero-mark" aria-hidden="true" viewBox="0 0 160 92" xmlns="http://www.w3.org/2000/svg">
+ <g fill="none" stroke="#9FF8EA" stroke-width="6" stroke-linecap="round">
+ <path d="M12 48V37M30 65V20M48 77V11M66 60V29M84 83V7M102 58V32M120 72V17M138 54V38"/>
+ </g>
+</svg>
+<div class="ac-brand">Audio<span>Check</span></div>
+<p class="ac-intro">Discover clues to a song's source, record speed, broadcast signals and digital file history.</p></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -83,11 +91,6 @@ if "upload_nonce" not in st.session_state:
 
 
 def store_report(rows, meta, name, kind):
-    # A YouTube re-encode is not evidence of the uploader's ORIGINAL file date.
-    if kind == "YouTube":
-        rows = [(key, {"result": "YouTube stream only", "certainty": "Tentative",
-                       "detail": "YouTube may re-encode audio. This stream cannot date the original uploaded file."}
-                 if key == "Digital file history" else value) for key, value in rows]
     # Do not store the uploaded bytes: only the small resulting report.
     st.session_state.report = {"rows": rows, "meta": meta, "name": name, "kind": kind}
     st.session_state.report_error = None
@@ -173,70 +176,75 @@ def display_result(key, item):
 
 
 def why(key, item):
-    if not meaningful(item):
-        if key == "Likely power system" and isinstance(item, dict):
-            return str(item.get("detail") or "No usable 50/60 Hz hum was found.")[:210]
-        return {
-            "Likely audio source": "No reliable clue separated vinyl, cassette, FM, AM or digital recordings.",
-            "Vinyl rotation": "No repeating pops reliably matched 33 1/3, 45 or 78 RPM.",
-            "Likely power system": "No steady 50 or 60 Hz electrical hum stood out.",
-            "Radio / TV signals": "No convincing old TV scan tone or FM pilot tone was found.",
-            "NDR-style 10 kHz dip": "No lasting narrow dip near 10 kHz was found.",
-            "Disc surface noise": "No distinctive pops or crackle stood out in the sections checked.",
-            "Possible tape dropouts": "No short, sudden losses of sound were found.",
-            "Stereo format": "The channels were too faint or inconsistent to compare.",
-            "Audio bandwidth": "The spectrum was too faint to measure.",
-            "Digital file history": "No useful encoding date or encoder version is in the file.",
-            "Playback speed": "Without a reference pitch or timing signal, overall speed can't be checked.",
-        }.get(key, "Not enough evidence to make a useful guess.")
-    detail = str(item.get("detail", ""))
-    raw = str(item.get("result", ""))
+    item = item if isinstance(item, dict) else {}
+    raw = str(item.get("result", "Unclear"))
+    detail = str(item.get("detail") or "").strip()
+    positive = meaningful(item)
+
+    # Preserve measured numbers provided by the signal analyzer; do not
+    # invent measured peak positions, click counts, or confidence statistics.
+    if not positive:
+        defaults = {
+            "Likely audio source": "No measured artifact reliably separated record, tape, radio and digital sources.",
+            "Vinyl rotation": "No stable series of clicks matched 33⅓, 45 or 78 RPM closely enough.",
+            "Likely power system": "No stable 50/60 Hz pattern or distinctive harmonics were found.",
+            "Radio / TV signals": "No sufficiently persistent, narrow 15,625 / 15,734 Hz TV tone or 19,000 Hz FM pilot was measured.",
+            "NDR-style 10 kHz dip": "No narrow, persistent reduction of energy around 10 kHz was established.",
+            "Stereo format": "The channels could not be distinguished reliably.",
+            "Digital file history": "No trustworthy encoder version or encoding-date tag was identified.",
+            "Playback speed": "Overall speed needs a known reference tone or comparison recording.",
+        }
+        note = detail or defaults.get(key, "The audio did not provide enough evidence.")
+        if key == "Likely power system":
+            note += " The test examines persistent narrow peaks near 50/60 Hz and their 100/120 Hz harmonics; musical bass can imitate a single peak."
+        elif key == "Radio / TV signals":
+            note += " A dashed guide in the graph marks the expected frequency; it is not a detected signal."
+        elif key == "NDR-style 10 kHz dip":
+            note += " A true notch is a dip (less energy), not a 10 kHz tone: it would look like a dark gap in the spectrogram and needs broadband audio around that band."
+        elif key == "Vinyl rotation":
+            note += " Random record crackle can still indicate vinyl without revealing the RPM."
+        elif key == "Digital file history":
+            note += " Track-year metadata is not evidence of when this file was encoded."
+        return note
+
     if key == "Likely audio source":
-        return detail[:350] if detail else "Best guess from pops, tape clues, broadcast tones and frequency range."
+        return "The source estimate combines clicks, surface noise, tape interruptions, broadcast tones and bandwidth. The score ranks clues; it is not a calibrated probability."
     if key == "Vinyl rotation":
-        match = re.search(r"(\d+) (?:short|quick) click", detail)
-        count = f"{match.group(1)} sharp pops" if match else "Sharp pops"
-        rpm = re.search(r"(33[\u2153]|33[ ]?1/3|45|78) RPM", raw)
-        value = rpm.group(1) if rpm else "record"
-        gap = {"45": "1.33", "78": "0.77", "33\u2153": "1.80", "33 1/3": "1.80"}.get(value)
-        return f"{count} line up about every {gap} seconds, matching {value} RPM. Drums can sometimes imitate pops." if gap else "Several sharp pops repeat at record-like intervals."
+        rpm = re.search(r"(33[⅓ ]*|45|78)\s*RPM", raw, re.I)
+        ref = ""
+        if rpm:
+            token = rpm.group(1).strip()
+            interval = "1.80" if token.startswith("33") else "1.33" if token == "45" else "0.77"
+            ref = f" A {token} RPM record makes one rotation about every {interval} seconds."
+        return (detail or "Sharp clicks repeat at a record-like interval.") + ref + " Percussion can sometimes mimic repeated groove defects."
     if key == "Likely power system":
-        freq = "50" if "50 Hz" in raw else "60" if "60 Hz" in raw else None
-        if freq:
-            peaks = re.search(r"Detected peaks include ([0-9., ]+ Hz)", detail)
-            measure = f"Measured: {peaks.group(1)}. " if peaks else ""
-            return measure + f"The {freq} Hz pattern may be electrical hum from recording or copying equipment."
-        return (detail[:180] if detail else "Neither 50 nor 60 Hz could be distinguished.")
+        return (detail or "Persistent narrowband power-frequency energy was measured.") + (
+            " The analyzer checks 50/60 Hz and their harmonics (100, 120, 150, 180 Hz and higher) across repeated time windows."
+            " Multiple steady lines support a mains-hum interpretation better than one isolated bass note."
+            " Hum can enter during recording, copying or digitization, so this does not establish studio location.")
     if key == "Radio / TV signals":
-        measured = re.search(r"peak at ([0-9.,]+) Hz \(([0-9.]+) dB", detail)
-        strength = (f"Measured {measured.group(1)} Hz ({measured.group(2)} dB above nearby sound). "
-                    if measured else "")
-        if "NTSC" in raw:
-            return strength + "Matches older NTSC TV equipment."
-        if "PAL" in raw or "SECAM" in raw:
-            return strength + "Matches older PAL/SECAM TV equipment."
-        if "FM" in raw:
-            return strength + "Matches the 19 kHz FM stereo pilot."
-        return strength + "A broadcast-related tone appears in the recording."
+        return (detail or "A narrow broadcast-frequency tone was measured.") + (
+            " Nominal reference frequencies: 15,734.26 Hz for 525-line NTSC-type equipment,"
+            " 15,625 Hz for 625-line PAL/SECAM-type equipment, and 19,000 Hz for an FM stereo pilot."
+            " A persistent narrow peak supports interference somewhere in the recording chain, not necessarily at the original studio.")
     if key == "NDR-style 10 kHz dip":
-        notch = re.search(r"near ([0-9]+) Hz.*?([0-9.]+) dB", detail)
-        fact = (f"Dip at {notch.group(1)} Hz, around {notch.group(2)} dB deep. "
-                if notch else "")
-        return fact + "Similar to an NDR-radio notch, but not unique to NDR."
-    if key == "Disc surface noise":
-        clicks = re.search(r"\((\d+) in qualifying sections\)", detail)
-        return ((clicks.group(1) + " short pops and gritty crackle were found, including quiet passages.")
-                if clicks else "Irregular pops and gritty noise persist between musical sounds.")
-    if key == "Possible tape dropouts":
-        return "Brief reductions in sound were measured. Tape damage is one possibility."
+        return (detail or "A narrow spectral notch was measured.") + (
+            " This feature is a local reduction in energy near 10 kHz, seen as a dark band"
+            " and a trough in the frequency profile. It resembles the NDR-related clue investigated"
+            " during The Most Mysterious Song search but cannot identify NDR by itself.")
     if key == "Stereo format":
-        if raw == "Mono":
-            return "The file contains one audio channel."
-        return "The left and right channels differ." if "Stereo" in raw else "Two channels carry almost identical sound."
-    if key in ("Audio bandwidth", "Digital file history"):
-        # Show measured facts and meaningful alternate explanations, not a generic disclaimer.
-        return detail[:275] if detail else "No date or frequency clue found."
-    return detail[:160] if detail else "Some evidence supports this guess."
+        return (detail or "Channel structure was measured.") + (
+            " The decoded left and right signals are compared; near-identical channels can indicate dual mono."
+            " This describes the file, not necessarily the original master.")
+    if key == "Digital file history":
+        return (detail or "Available encoder metadata was inspected.") + (
+            " Encoder versions can establish an earliest plausible encoding year."
+            " Tags may be edited or rewritten, and the recording itself may be decades older.")
+    if key == "Playback speed":
+        return (detail or "A pitch or timing reference was considered.") + (
+            " Absolute speed cannot be established from musical pitch alone without a trusted reference."
+            " Wow/flutter fluctuations are different from a constant playback-speed offset.")
+    return detail or "The measured signal supports this interpretation."
 
 
 def card(label, item, key=None, evidence_plots=None):
@@ -267,7 +275,8 @@ def card(label, item, key=None, evidence_plots=None):
                 facts.append("Frequency range: " + summary + (". " + reason if reason else ""))
         # Short factual list. An uncertain source still gets the frequency facts.
         if facts:
-            details_html = '<ul>' + ''.join(f'<li>{html.escape(f)}</li>' for f in facts[:7]) + '</ul>'
+            details_html = (f'<p>{html.escape(description)}</p>' +
+                            '<ul>' + ''.join(f'<li>{html.escape(f)}</li>' for f in facts[:10]) + '</ul>')
     elif key == "Digital file history":
         facts = item.get("facts", {}) if isinstance(item.get("facts"), dict) else {}
         fmt = str(facts.get("codec") or "").upper()
@@ -284,7 +293,7 @@ def card(label, item, key=None, evidence_plots=None):
         if bits:
             sub = f'<div class="ac-sub">{html.escape(" · ".join(bits))}</div>'
     if evidence_plots:
-        details_html += '<div class="ac-evidence-intro">Signal check · from this recording</div>'
+        details_html += '<div class="ac-evidence-intro">Measured spectrogram · selected excerpt</div>'
         for entry in evidence_plots[:2]:
             img = entry.get('image_base64', '')
             if not isinstance(img, str) or not re.fullmatch(r'[A-Za-z0-9+/=]{100,400000}', img):
@@ -336,7 +345,7 @@ def sorted_findings(rows):
 
 
 st.markdown('<div class="ac-heading">Check a song</div>', unsafe_allow_html=True)
-file_tab, archive_tab, youtube_tab = st.tabs(["Upload audio", "Archive.org link", "YouTube (beta)"])
+file_tab, archive_tab = st.tabs(["Upload audio", "Archive.org link"])
 with file_tab:
     with st.form("upload_form", enter_to_submit=False, clear_on_submit=False):
         uploaded = st.file_uploader("Choose a file (up to 5 minutes)",
@@ -386,30 +395,6 @@ with archive_tab:
             except Exception:
                 st.session_state.report_error = "This archive link could not be analyzed. Try uploading the MP3."
 
-with youtube_tab:
-    st.caption("YouTube can block cloud servers (403). Archive.org direct audio links or file uploads are more reliable.")
-    with st.form("youtube_form", enter_to_submit=False):
-        link = st.text_input("Video address", placeholder="https://www.youtube.com/watch?v=...")
-        allowed = st.checkbox("I have permission to retrieve and analyze this audio")
-        pressed_yt = st.form_submit_button("Analyze YouTube audio", use_container_width=True)
-    if pressed_yt:
-        st.session_state.report_error = None
-        if not link.strip():
-            st.session_state.report_error = "Paste a YouTube link first."
-        elif not allowed:
-            st.session_state.report_error = "Confirm that audio retrieval is permitted."
-        else:
-            try:
-                with st.spinner("Fetching audio..."):
-                    with tempfile.TemporaryDirectory(prefix="audiocheck_yt_") as td:
-                        path, title = download_youtube_audio(link, Path(td))
-                        rows, meta = analyze_path(path, title, charts=True)
-                store_report(rows, meta, title, "YouTube")
-            except ValueError as exc:
-                st.session_state.report_error = str(exc)
-            except Exception:
-                st.session_state.report_error = "YouTube refused this request. Try uploading an audio file."
-
 if st.session_state.report_error:
     st.error(st.session_state.report_error)
 
@@ -432,7 +417,5 @@ if report:
         st.caption(f'Codec: {meta.get("codec", "unknown")}{rate_text} · '
                    f'Sample rate: {meta.get("input_rate", "?")} Hz · '
                    f'Channels: {meta.get("channels", "?")}')
-        if report.get("kind") == "YouTube":
-            st.caption("YouTube gives us a downloaded stream, not the original uploader's file or original metadata.")
     st.markdown('<div class="ac-foot">Fun clues, not proof. Noise can come from a later recording or copy.</div>',
                 unsafe_allow_html=True)

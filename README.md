@@ -1,52 +1,37 @@
-# AudioCheck v1.5 — Signal viewer
+# AudioCheck v1.6 — Dark Page / High-Contrast Evidence
 
-A lightweight, colourful Streamlit app for exploring clues in an audio recording. Upload an audio file (maximum **five minutes**), paste a direct Internet Archive audio link, or use the experimental YouTube option. The app suggests vinyl/record, cassette, FM/AM, or digital source clues, plus RPM, 50/60 Hz mains interference, historical television-frequency signals, the 10 kHz NDR-style dip, and digital-file dating information.
+A Streamlit web app that searches for clues in an audio recording: record-like clicks and rotation timing, cassette/tape artifacts, broadcast pilot/TV tones, 50/60 Hz electrical hum, an NDR-style 10 kHz spectral notch, stereo/mono, and the digital file's encoding history.
 
-## What's new in v1.5
+## Changes in v1.6
 
-- The **Power region → Why?** card displays a *real spectrogram* of the uploaded audio around **50/60 Hz** and its **100/120 Hz harmonics**.
-- The **Radio / TV signal → Why?** card displays a real zoomed view of **15,625 Hz** (625-line) and **15,734.26 Hz** (525-line) TV scanning frequencies. An extra **19,000 Hz** FM pilot view appears when the analyzer suggests FM evidence.
-- The **NDR 10 kHz dip → Why?** card shows the audio around **10,000 Hz**; the clue is a **dark notch**, not a bright line. A frequency-profile graph underneath helps spot a dip.
-- Graphs are made from **selected sections of the actual user recording**, not example audio. The dashed markings are **reference guides**, *not* detections. Bright horizontal streaks indicate measured narrowband energy; musical tones can sometimes resemble interference.
-- Automatic positive-first ordering and grey uncertain cards remain. The refreshed light colour scheme uses stronger contrast, teal/blue/violet accents, and larger text.
-- Only rendered PNG snippets are kept with the results during the Streamlit session. Decoded sound snippets are discarded after chart creation.
+- **Dark navy page with an electric purple/coral header and turquoise waveform graphic.** Results stay easy to read: high-contrast pale cards for findings; subdued slate cards for absent/uncertain clues.
+- **Higher-contrast spectrograms:** actual decoded audio plotted in near-black/purple-to-orange/yellow (`inferno`), with a turquoise *guide* line. A guide line is **not** evidence that a signal was detected. The heatmap uses one common colour scale across each plotted frequency band, never normalizes each frequency row, and does not feed back into the detector's scoring.
+- **Technical “Why?” panels:** measured frequencies and details from the analyzer are retained; notes explain harmonic families, expected TV/FM frequencies, rotating scratch intervals, the 10 kHz dip, digital encoding dates, and limitations.
+- **YouTube input removed** because server-side 403 errors made it unreliable. `yt-dlp` and Deno dependencies were removed. Keep uploading files or use a **direct Internet Archive audio-file link**.
+- Preserves the five-minute limit, submit button, clearing the selected upload after analysis, source estimates, ranking, and digital-file dating.
 
-## Update your existing `audiocheck` GitHub repository
+## Updating the existing Streamlit app
 
-Replace `app.py`, `analyzer.py`, and `requirements.txt`, **add the new `spectrograms.py`**, and replace `.streamlit/config.toml` to get the new theme. Commit to `main`. Streamlit Community Cloud normally redeploys automatically. Leave `archive_source.py`, `youtube_source.py`, and `file_history.py` unchanged if you already have v1.4, or upload them from this ZIP as well.
+Your repository remains **`audiocheck`**, entrypoint **`app.py`**. In GitHub, upload these files to the repository root (replace existing versions):
 
-The Streamlit entry point remains `app.py`; there is **no migration** or change of hosting service.
+1. `app.py`
+2. `spectrograms.py`
+3. `requirements.txt`
+4. `.streamlit/config.toml` (preserve the `.streamlit` folder)
 
-## Dependencies
+The ZIP also includes current compatible `analyzer.py`, `archive_source.py`, `file_history.py`, and `packages.txt`. Upload those too if you are unsure whether your existing files match v1.5. The old `youtube_source.py` can be deleted from GitHub; it is no longer imported or needed. Commit changes to `main`; Streamlit should automatically redeploy. No need to move to another host. Use **Python 3.12** if recreating the app.
 
-- Python 3.12 or a supported newer version.
-- `ffmpeg` and `ffprobe` (specified in `packages.txt`).
-- Dependencies from `requirements.txt`, including **new** `matplotlib>=3.8,<4`.
+## Limitations
 
-## How to read the charts
+- These tests look for *evidence* in the transferred audio, not proof of where or when a song was originally recorded. A record can be copied to cassette and eventually encoded as MP3.
+- The strongest narrow 50/60 Hz line can be a musical note; multiple persistent harmonics are better evidence of power hum. No signal is reported as certain without evidence.
+- Bright pixels do not mean an artifact is automatically present; spectrograms are visual checks, and turquoise lines are expected frequency **references**.
+- Adaptive display contrast is used **per complete band** (not per frequency), and only changes the chart appearance, not the analysis result.
+- Digital codec history dates only the encoded copy; tags can be modified or rewritten.
+- Cloud performance and user-device file picker behaviour still need testing on your live app.
 
-- **Power**: look for a *persistent* horizontal streak near 50 or 60 Hz, ideally also at 100 or 120 Hz. A single musical note at 60 Hz isn't proof of mains hum.
-- **TV/FM**: a narrow bright horizontal line and a corresponding spectral-profile spike suggest a broadcast-related tone. Its presence may reflect *later copying*, not the original studio.
-- **NDR dip**: a persistent *dark* horizontal band and a spectral-profile trough near 10 kHz can resemble the known NDR-related recording artifact; it is not uniquely attributable to NDR.
-- A **dashed red marker** simply shows where a reference frequency would be; it does not indicate a measurement was found.
-- For performance, the app examines selected sections of each song, not every single second of a five-minute recording. It chooses the section with the most evidence for each plot.
+## Tests
 
-## Research methods
+Run `python -m pytest tests -q` with Python 3.12+ and the requirements installed. `ffmpeg`/`ffprobe` must also be available (included via `packages.txt` on Streamlit Cloud).
 
-Forensic ENF guidance recommends high-resolution windowed spectrograms, narrow frequency zooms, and inspection of harmonics. This implementation uses a **Hamming-window short-time Fourier transform**, a 2 kHz downsample for the power bands, and a 44.1 kHz decoded signal for higher-frequency TV/FM/notch views. Selected 18-second excerpts provide manageable plots. The plots are exploratory visualizations; the separate signal detectors supply the verdicts.
-
-References:
-- [ENFSI, Best Practice Guidelines for ENF Analysis, section 5.1.2](https://enfsi.eu/wp-content/uploads/2016/09/forensic_speech_and_audio_analysis_wg_-_best_practice_guidelines_for_enf_analysis_in_forensic_authentication_of_digital_evidence_0.pdf)
-- [BitEU/ENF-Extractor](https://github.com/BitEU/ENF-Extractor)
-- [josuenadal/ENF-extractor](https://github.com/josuenadal/ENF-extractor)
-- [nate-griff/enf](https://github.com/nate-griff/enf)
-
-## Test
-
-From the repository root:
-
-```bash
-python -m pytest -q
-```
-
-Requires `pytest` in the local test environment (not a Streamlit hosting dependency). See `VALIDATION.md`.
+See `VALIDATION.md` for results and known limits.

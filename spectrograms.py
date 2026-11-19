@@ -18,10 +18,10 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 AUDIO_RATE = 44100
 PREVIEW_SECONDS = 18
 
-PAPER = '#ffffff'
+PAPER = '#FFFFFF'
 INK = '#14243d'
 MUTED = '#53647a'
-GUIDE = '#ff5d73'
+GUIDE = '#25F4DE'
 
 
 def _line_contrast(y, fs, target):
@@ -73,20 +73,29 @@ def _plot_panel(fig, ax, f, t, db, low, high, guides, title, show_xlabel=True):
     if np.count_nonzero(mask) < 5:
         raise ValueError('Input has insufficient frequency resolution.')
     band = db[mask]
-    # Relative scale within the *entire selected frequency band*. Never normalize
-    # each frequency row: doing so would fabricate strong horizontal streaks.
-    top = float(np.percentile(band, 99.5))
-    mapped = np.clip(band - top, -62, 8)
-    # Spectrogram: x=time, y=frequency. Horizontal bright streaks are actual energy.
-    ax.pcolormesh(t, f[mask], mapped, shading='nearest', cmap='viridis',
-                  vmin=-62, vmax=8, rasterized=True)
+    # A single contrast scale for the WHOLE frequency/time panel (not per row).
+    # Automatic levels make weak real peaks visible without drawing false lines.
+    # Never apply spectral whitening or normalize each frequency independently:
+    # that would manufacture horizontal streaks that were not actually measured.
+    high_db = float(np.percentile(band, 99.8))
+    background_db = float(np.percentile(band, 12.0))
+    dynamic_range = float(np.clip(high_db - background_db, 30.0, 65.0))
+    low_db = high_db - dynamic_range
+    # Inferno: low energy nearly black, strong energy bright yellow/orange.
+    # Plot the actual dB matrix; colour mapping only adjusts its display range.
+    ax.pcolormesh(t, f[mask], band, shading='nearest', cmap='inferno',
+                  vmin=low_db, vmax=high_db, rasterized=True)
     for hz, label in guides:
         if low <= hz <= high:
-            ax.axhline(hz, lw=1.1, ls=(0,(4,4)), color=GUIDE, alpha=.9)
-            ax.annotate(label, (t[0], hz), xytext=(4, 3), textcoords='offset points',
-                        va='bottom', fontsize=8.5, weight='bold', color='#db415d')
+            # A two-layer guide stays visible on yellow AND dark parts of the plot.
+            ax.axhline(hz, lw=2.8, color='#04070C', alpha=.75)
+            ax.axhline(hz, lw=1.3, ls=(0,(4,4)), color=GUIDE, alpha=.95)
+            ax.annotate(label, (t[0], hz), xytext=(5, 3), textcoords='offset points',
+                        va='bottom', fontsize=9.0, weight='bold', color='#D5FFF9',
+                        bbox={'boxstyle':'round,pad=.18','facecolor':'#091A2D',
+                              'edgecolor':'none','alpha':.88})
     ax.set_ylim(low, high)
-    ax.set_xlim(t[0], t[-1])
+    ax.set_xlim(t[0]-.5, t[-1]+.5) if len(t)==1 else ax.set_xlim(t[0], t[-1])
     ax.set_title(title, fontsize=11, fontweight='bold', color=INK, loc='left', pad=7)
     ax.set_ylabel('Frequency (Hz)', fontsize=9, color=MUTED)
     if show_xlabel:
@@ -97,7 +106,7 @@ def _plot_panel(fig, ax, f, t, db, low, high, guides, title, show_xlabel=True):
     ax.grid(False)
     for side in ax.spines.values():
         side.set_color('#CBD7E5')
-    ax.set_facecolor('#f6f8fe')
+    ax.set_facecolor('#060914')
 
 
 def _figure_bytes(fig):
@@ -139,7 +148,7 @@ def render_evidence(audio, kind, start_seconds=0.0, original_rate=44100, target=
     if kind == 'mains':
         y = signal.resample_poly(y, 20, 441)
         fs = 2000
-        f, t, db = _stft(y, fs, 6 * fs)  # .167 Hz bins; ~1s movement
+        f, t, db = _stft(y, fs, min(6 * fs, max(2 * fs, len(y) // 2)))  # .167-.5 Hz bins
     else:
         fs = AUDIO_RATE
         f, t, db = _stft(y, fs, 16384)  # 2.69 Hz bins, preserves narrow 10 kHz dip
@@ -160,20 +169,20 @@ def render_evidence(audio, kind, start_seconds=0.0, original_rate=44100, target=
         # Median spectral level from the actual time slices; useful for verifying
         # a positive peak (TV / FM) or negative notch (NDR).
         median_db = np.median(db[band],axis=1)
-        profile.plot(f[band],median_db, color='#087e9e',lw=1.6)
+        profile.plot(f[band],median_db, color='#F0A000',lw=2.1)
         for hz,label in guides:
             profile.axvline(hz, ls=(0,(4,4)),color=GUIDE,lw=1,alpha=.9)
         profile.set_xlim(lo,hi)
         profile.set_ylabel('Level (dB)',fontsize=9,color=MUTED)
         profile.set_xlabel('Frequency (Hz)',fontsize=9,color=MUTED)
         profile.tick_params(colors=MUTED,labelsize=8)
-        profile.set_facecolor('#f6f8fe')
+        profile.set_facecolor('#F8FAFF')
         for side in profile.spines.values():side.set_color('#CBD7E5')
     duration = len(audio)/AUDIO_RATE
     cap = f'Real audio: {start_seconds:.0f}-{start_seconds+duration:.0f}s · {channel}. '
     cap += ('Bright streak = sound at that frequency. '
             if kind != 'ndr' else 'A dark horizontal gap near 10 kHz would be the notch. ')
-    cap += 'Dashed = guide only. Colours show relative strength.'
+    cap += 'Yellow/orange = stronger; dark purple/black = weaker. Dashed = guide only (turquoise), not proof of detection.'
     return {'png':_figure_bytes(fig), 'caption':cap,
             'section_start_s':float(start_seconds),'section_duration_s':float(duration),
             'channel':channel,'kind':kind}

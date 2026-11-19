@@ -1,21 +1,22 @@
-# AudioCheck v1.5 — Validation notes
+# AudioCheck v1.6 — Validation notes
 
-## Checks completed
+## Performed in this workspace
 
-- **105 automated tests passed** on Python 3.13, covering the baseline analyzers and new spectrogram image creation, frequency resolution, stereo-channel choice, high-frequency availability, PNG embedding, mobile-friendly result-card markup, and successful clearing of uploaded file selections.
-- **Synthetic 60 Hz + 120 Hz hum**: graph contains a visible horizontal line at both frequencies; measured STFT levels exceed the respective 50/100 Hz comparison regions.
-- **Synthetic 15,734.26 Hz television-frequency tone**: chart shows a bright horizontal line and narrow spectral-profile peak.
-- **Synthetic 10 kHz notch**: graph shows a dark horizontal band and corresponding profile trough. Test confirmed the feature is a *dip*, not a 10 kHz tone.
-- **Stereo anti-phase hum**: renderer chooses a channel rather than mixing to mono and cancelling the hum.
-- **Actual attached EKT sample (17 seconds)**: the previously detected ~15,734 Hz TV scan signature appears as a clear bright line on the generated TV spectrogram. Its power result remains *tentative*.
-- **Actual attached historical Hysterics Rag MP3**: produced power, TV, and 10 kHz plots without a crash. The core classifier still reports record-like source evidence; no TV or NDR finding was added based solely on display graphs.
-- **Visual QA:** static browser previews were checked at desktop and 430-pixel mobile widths. Both render the image previews in the correct result cards. This is **not** an end-to-end test on the live Streamlit Cloud host.
+- **92 automated tests passed** after removing the obsolete YouTube tests and adding six v1.6-specific checks.
+- Retained synthetic 50 Hz/60 Hz harmonics, 525/625-line TV tones, 19 kHz FM, 10 kHz notch, disc clicks, metadata, no-signal, and defensive-display checks from the prior release.
+- The v1.6 checks confirm: no YouTube upload or downloader dependency, dark Streamlit theme, contrasting decorative waveform header, explanations that include measured data and technical context, negative-result explanations, and the new high-contrast `inferno` chart renderer.
+- **Real EKT example:** generated actual TV and power spectrograms from the attached EKT MP3, including the known peak near 15,734 Hz. The core analyzer still provides the verdict; plots do not alter its thresholds.
+- **Visual browser preview** captured at desktop (1140 px) and mobile (430 px) widths. Expanded TV and power “Why?” cards successfully display the real charts, the dark background, readable pastel results, and the bright header.
 
-## Important limits
+## Not verified
 
-- A *horizontal line on a spectrogram* is not sufficient to prove 50/60 Hz electrical interference; music can have sustained notes in the same band. Existing classifier logic still determines the verdict from persistence and harmonics.
-- A dashed guide line is drawn even when the frequency is absent. It is **not** the detected signal.
-- Band colours are scaled relative to the surrounding selected frequency band; visually bright pixels are not automatically meaningful.
-- The graph shows a bounded excerpt with the best available clue, **not the entire file**. Other portions can differ.
-- Streamlit must install Matplotlib from the updated requirements; uploads on actual Android browsers and the YouTube 403 problem are outside this change.
-- No recorded audio is included in the distributable ZIP. Only source files and tests are packaged.
+- No end-to-end deployment or audio upload on the live Streamlit Cloud host was performed in this environment. The Streamlit package is unavailable here; browser previews are static renderings of the app's actual HTML/CSS and generated spectrograms, not a running Streamlit deployment.
+- No new real-world external recording benchmark was performed for this UI-focused release. Signal detection thresholds remain those of v1.5.
+
+## Chart methodology
+
+- STFT on decoded audio, Hamming window, high frequency resolution; downsample to 2 kHz for low-frequency hum.
+- Automatically set a **single** colour dynamic range across each complete displayed frequency/time band (30–65 dB based on percentiles), not per frequency row. This increases visibility without changing peaks or inventing lines.
+- `inferno` yellow/orange = stronger audio energy, purple/black = weaker. Dashed turquoise = nominal frequency **reference**, not detection.
+- NDR-style result looks for a **reduction** (a dark gap / frequency-profile trough), not a bright 10 kHz line.
+- Graphs cover selected excerpts (not necessarily all five minutes), chosen based on the underlying analysis.
