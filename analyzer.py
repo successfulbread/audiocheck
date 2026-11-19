@@ -968,7 +968,7 @@ def _diagnostics(windows):
             "pilot_frequency_scatter_hz": round(float(np.median(pilot)),2) if pilot else None,
             "sampled_sections": len(windows)}
 
-def analyze_path(path, file_name=None):
+def analyze_path(path, file_name=None, *, charts=False):
     """Read selected portions of a 4--300 second file, return (rows, metadata)."""
     path = Path(path)
     if path.suffix.lower() not in EXTENSIONS:
@@ -978,6 +978,7 @@ def analyze_path(path, file_name=None):
     metadata = _probe(path)
     metadata["file_history"] = inspect_file(path, metadata)
     analyzed = []
+    plot_sections = [] if charts else None
     analyzed_seconds = 0.0
     for start, seconds in _windows(metadata["duration"]):
         audio = _decode_window(path, start, seconds)
@@ -997,6 +998,18 @@ def analyze_path(path, file_name=None):
                          "clipped":float(np.mean(np.abs(audio) >= .998)),
                          "pilot_jitter":pilot_jitter, "stereo_corr":stereo_corr,
                          "ndr":_ndr_notch_window(audio, metadata["input_rate"])})
+        if charts:
+            # Bounded real excerpts; retained temporarily only until plots render.
+            # Use a centred part of each sampled section so every chosen clue can
+            # display evidence from its own window, not an unrelated excerpt.
+            preview_len = min(len(audio), SAMPLE_RATE * 18)
+            offset = max(0, (len(audio) - preview_len) // 2)
+            plot_sections.append({
+                "audio": audio[offset:offset + preview_len].copy(),
+                "start": start + offset / SAMPLE_RATE,
+                "mains": mains, "broadcast": air,
+                "ndr": analyzed[-1]["ndr"],
+            })
         analyzed_seconds += len(audio)/SAMPLE_RATE
         del audio # Avoid keeping 100+ MB of decoded audio in RAM.
     if not analyzed:
@@ -1032,13 +1045,17 @@ def analyze_path(path, file_name=None):
         ('Digital file history',metadata['file_history']),
         ('Stereo format',stereo),
     ]
+    if charts:
+        from spectrograms import make_evidence_charts
+        metadata["spectrograms"] = make_evidence_charts(plot_sections, rows, metadata["input_rate"])
+        plot_sections.clear()  # Do not preserve decoded audio beyond this call.
     metadata["analyzed_seconds"] = round(analyzed_seconds, 1)
     metadata["diagnostics"] = diag
     metadata.pop("stream_tags", None)
     metadata.pop("format_tags", None)
     return rows, metadata
 
-def analyze(data: bytes, filename: str):
+def analyze(data: bytes, filename: str, *, charts=False):
     """Bytes-oriented API wrapper; temporary file is always removed."""
     ext = Path(filename).suffix.lower()
     if ext not in EXTENSIONS:
@@ -1048,4 +1065,4 @@ def analyze(data: bytes, filename: str):
     with tempfile.TemporaryDirectory(prefix="audiocheck_") as tempdir:
         path = Path(tempdir) / ("upload" + ext)
         path.write_bytes(data)
-        return analyze_path(path, filename)
+        return analyze_path(path, filename, charts=charts)

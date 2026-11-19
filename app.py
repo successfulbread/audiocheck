@@ -1,4 +1,4 @@
-"""AudioCheck v1.3 - folded frequency clues and improved file-age dating."""
+"""AudioCheck v1.5 - colour refresh and measured spectral evidence."""
 from __future__ import annotations
 
 import html
@@ -17,27 +17,27 @@ st.set_page_config(page_title="AudioCheck | Find the clues", page_icon=":materia
 st.markdown("""
 <style>
 html,body,.stApp { font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif; }
-.stApp { background:#F7FAFF; color:#17314E; }
+.stApp { background:#FCFCFF; color:#16233E; }
 .block-container { max-width:980px; padding-top:1.1rem; padding-bottom:3rem; }
 header[data-testid="stHeader"] {background:transparent;}
-.ac-hero {background:linear-gradient(115deg,#DBF8ED 0%,#E8F1FF 54%,#FFF0DB 100%);
-  border:1px solid #D8E7F0;border-radius:23px;padding:22px 26px;margin:0 0 18px;}
+.ac-hero {background:linear-gradient(118deg,#E7FFF7 0%,#EEF1FF 53%,#FFF0E7 100%);
+  border:1px solid #C5D6EF;border-radius:23px;box-shadow:0 7px 25px #425D8A12;padding:22px 26px;margin:0 0 18px;}
 .ac-brand {font-size:clamp(2.3rem,6vw,3.3rem);line-height:1.08;letter-spacing:-.055em;font-weight:900;
-  color:#16385C;margin:0 0 5px;}
-.ac-brand span {color:#087E9E;}
-.ac-intro {font-size:.94rem;color:#355573;margin:0;}
-.ac-heading {font-size:1.3rem;font-weight:850;color:#173657;margin:16px 0 10px;}
+  color:#182B56;margin:0 0 5px;}
+.ac-brand span {color:#A53BCD;}
+.ac-intro {font-size:1rem;color:#2C4771;margin:0;}
+.ac-heading {font-size:1.4rem;font-weight:850;color:#182E61;margin:16px 0 10px;}
 .ac-meta {font-size:.78rem;color:#647991;margin:-3px 0 15px;overflow-wrap:anywhere;}
 .ac-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:17px;}
-.ac-card {border:1px solid;border-radius:19px;padding:16px 17px 13px;min-width:0;
-  box-shadow:0 4px 13px #244C6810;}
-.ac-card.strong {background:linear-gradient(135deg,#DCFBEA,#F3FFF6);border-color:#7CD8A9;}
-.ac-card.good {background:linear-gradient(135deg,#DDEEFF,#F1FAFF);border-color:#96C8F5;}
-.ac-card.maybe {background:linear-gradient(135deg,#FFF0D4,#FFF9EF);border-color:#F6C581;}
-.ac-card.none {background:#F1F3F6;border-color:#DDE1E7;box-shadow:none;color:#788594;}
+.ac-card {border:1.5px solid;border-radius:19px;padding:16px 17px 13px;min-width:0;
+  box-shadow:0 5px 16px #30519D0D;}
+.ac-card.strong {background:linear-gradient(135deg,#DDFBEC,#F2FFF9);border-color:#61CB9D;}
+.ac-card.good {background:linear-gradient(135deg,#E1F1FF,#F2FAFF);border-color:#79B6F3;}
+.ac-card.maybe {background:linear-gradient(135deg,#FFF0DC,#FFF9F0);border-color:#F3B266;}
+.ac-card.none {background:#F3F4F7;border-color:#D5DCE6;box-shadow:none;color:#788594;}
 .ac-top {display:flex;align-items:center;gap:7px;margin-bottom:11px;}
 .ac-icon {font-size:1.14rem;line-height:1.2;flex:none;}
-.ac-label {font-size:.76rem;font-weight:800;color:#435B73;flex:1;}
+.ac-label {font-size:.84rem;font-weight:800;color:#31496F;flex:1;}
 .ac-card.none .ac-label{color:#7A8793;}
 .ac-pill {border-radius:999px;font-size:.66rem;font-weight:800;padding:4px 8px;white-space:nowrap;}
 .ac-card.strong .ac-pill{background:#B7F0CF;color:#08683C;}
@@ -45,16 +45,25 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-card.maybe .ac-pill{background:#FFE0A8;color:#81500A;}
 .ac-card.none .ac-pill{background:#E2E5EB;color:#697481;}
 .ac-sub{font-size:.78rem;font-weight:650;color:#4B647F;margin-top:7px;}
-.ac-result{font-size:1.15rem;line-height:1.3;font-weight:850;color:#17385A;overflow-wrap:anywhere;min-height:1.45em;}
+.ac-result{font-size:1.22rem;line-height:1.3;font-weight:850;color:#142C57;overflow-wrap:anywhere;min-height:1.45em;}
 .ac-card.none .ac-result{font-size:1rem;color:#697785;}
 .ac-card.none .ac-sub{color:#788592;}
 .ac-card details{border-top:1px solid #AFC9D533;margin-top:12px;padding-top:8px;}
-.ac-card summary{font-size:.78rem;font-weight:800;color:#246193;cursor:pointer;}
+.ac-card summary{font-size:.88rem;font-weight:800;color:#20599F;cursor:pointer;}
 .ac-card.none summary{color:#6D7C8B;}
-.ac-card details p{font-size:.82rem;line-height:1.47;color:#435A71;margin:8px 0 2px;}
+.ac-card details p{font-size:.88rem;line-height:1.5;color:#334A64;margin:8px 0 2px;}
 .ac-card details ul{margin:9px 0 0;padding-left:19px;}
-.ac-card details li{font-size:.82rem;line-height:1.43;color:#435A71;margin:5px 0;}
+.ac-card details li{font-size:.88rem;line-height:1.5;color:#334A64;margin:5px 0;}
 .ac-card.none details p{color:#6D7B88;}
+.ac-card.has-spectrogram{grid-column:1 / -1;}
+.ac-evidence-intro{margin-top:13px;margin-bottom:7px;color:#384A6F;
+  font-weight:800;font-size:.8rem;}
+.ac-evidence{margin:8px 0 14px;padding:8px;background:#FFFFFF;
+  border:1px solid #C7D6E6;border-radius:12px;}
+.ac-evidence img{width:100%;height:auto;display:block;border-radius:7px;}
+.ac-evidence figcaption{font-size:.75rem;color:#4B5B70;margin:8px 2px 0;
+  line-height:1.45;}
+.ac-card details{overflow:hidden;}
 .ac-foot{font-size:.76rem;color:#6A7D91;margin-top:13px;}
 @media(max-width:675px){.ac-grid{grid-template-columns:1fr;gap:10px;}
   .ac-hero{padding:20px 18px}.block-container{padding-top:.55rem;}
@@ -194,18 +203,26 @@ def why(key, item):
     if key == "Likely power system":
         freq = "50" if "50 Hz" in raw else "60" if "60 Hz" in raw else None
         if freq:
-            return f"A steady line near {freq} Hz may be electrical hum from recording or copying equipment."
-        return (detail[:200] if detail else "Weak peaks do not clearly favour 50 or 60 Hz.")
+            peaks = re.search(r"Detected peaks include ([0-9., ]+ Hz)", detail)
+            measure = f"Measured: {peaks.group(1)}. " if peaks else ""
+            return measure + f"The {freq} Hz pattern may be electrical hum from recording or copying equipment."
+        return (detail[:180] if detail else "Neither 50 nor 60 Hz could be distinguished.")
     if key == "Radio / TV signals":
+        measured = re.search(r"peak at ([0-9.,]+) Hz \(([0-9.]+) dB", detail)
+        strength = (f"Measured {measured.group(1)} Hz ({measured.group(2)} dB above nearby sound). "
+                    if measured else "")
         if "NTSC" in raw:
-            return "A narrow tone near 15,734 Hz matches older NTSC TV equipment."
+            return strength + "Matches older NTSC TV equipment."
         if "PAL" in raw or "SECAM" in raw:
-            return "A narrow tone near 15,625 Hz matches older PAL/SECAM TV equipment."
+            return strength + "Matches older PAL/SECAM TV equipment."
         if "FM" in raw:
-            return "A steady 19,000 Hz tone matches the FM stereo pilot signal."
-        return "A narrow broadcast-related tone appears in the audio."
+            return strength + "Matches the 19 kHz FM stereo pilot."
+        return strength + "A broadcast-related tone appears in the recording."
     if key == "NDR-style 10 kHz dip":
-        return "A narrow dip around 10 kHz resembles one found on some NDR radio recordings. It isn't unique to NDR."
+        notch = re.search(r"near ([0-9]+) Hz.*?([0-9.]+) dB", detail)
+        fact = (f"Dip at {notch.group(1)} Hz, around {notch.group(2)} dB deep. "
+                if notch else "")
+        return fact + "Similar to an NDR-radio notch, but not unique to NDR."
     if key == "Disc surface noise":
         clicks = re.search(r"\((\d+) in qualifying sections\)", detail)
         return ((clicks.group(1) + " short pops and gritty crackle were found, including quiet passages.")
@@ -222,11 +239,13 @@ def why(key, item):
     return detail[:160] if detail else "Some evidence supports this guess."
 
 
-def card(label, item, key=None):
+def card(label, item, key=None, evidence_plots=None):
     key = key or label
     item = item if isinstance(item, dict) else {}
     cls = badge_class(item)
     pill = {"strong": "Clear clue", "good": "Good clue", "maybe": "Best guess", "none": "No clue"}[cls]
+    if evidence_plots:
+        cls += " has-spectrogram"
     icon = LABELS.get(key, (label, "&#9835;"))[1]
     value = display_result(key, item)
     description = why(key, item)
@@ -264,7 +283,19 @@ def card(label, item, key=None):
             bits.append(enc[:38])
         if bits:
             sub = f'<div class="ac-sub">{html.escape(" · ".join(bits))}</div>'
-    return (f'<section class="ac-card {cls}">'
+    if evidence_plots:
+        details_html += '<div class="ac-evidence-intro">Signal check · from this recording</div>'
+        for entry in evidence_plots[:2]:
+            img = entry.get('image_base64', '')
+            if not isinstance(img, str) or not re.fullmatch(r'[A-Za-z0-9+/=]{100,400000}', img):
+                continue
+            caption = html.escape(str(entry.get('caption','')))
+            details_html += ('<figure class="ac-evidence">'
+                             '<img loading="lazy" alt="Actual audio frequency spectrogram" '
+                             f'src="data:image/png;base64,{img}" />'
+                             f'<figcaption>{caption}</figcaption>'
+                             '</figure>')
+    return (f'<section class="ac-card {cls}">' 
             f'<div class="ac-top"><span class="ac-icon">{icon}</span>'
             f'<span class="ac-label">{html.escape(label)}</span>'
             f'<span class="ac-pill">{pill}</span></div>'
@@ -323,7 +354,7 @@ with file_tab:
             try:
                 with st.spinner("Listening for clues..."):
                     name = Path(uploaded.name).name
-                    rows, meta = analyze(uploaded.getvalue(), name)
+                    rows, meta = analyze(uploaded.getvalue(), name, charts=True)
                 store_report(rows, meta, name, "Upload")
                 # A new widget key removes the finished file from the upload bar.
                 st.session_state.upload_nonce += 1
@@ -348,7 +379,7 @@ with archive_tab:
                 with st.spinner("Fetching archive audio..."):
                     with tempfile.TemporaryDirectory(prefix="audiocheck_archive_") as td:
                         path, title = fetch_archive_audio(archive_link, Path(td))
-                        rows, meta = analyze_path(path, title)
+                        rows, meta = analyze_path(path, title, charts=True)
                 store_report(rows, meta, title, "Archive")
             except ValueError as exc:
                 st.session_state.report_error = str(exc)
@@ -372,7 +403,7 @@ with youtube_tab:
                 with st.spinner("Fetching audio..."):
                     with tempfile.TemporaryDirectory(prefix="audiocheck_yt_") as td:
                         path, title = download_youtube_audio(link, Path(td))
-                        rows, meta = analyze_path(path, title)
+                        rows, meta = analyze_path(path, title, charts=True)
                 store_report(rows, meta, title, "YouTube")
             except ValueError as exc:
                 st.session_state.report_error = str(exc)
@@ -390,8 +421,10 @@ if report:
     st.markdown('<div class="ac-heading">What we found</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="ac-meta">{name} &middot; {duration:.0f} sec</div>', unsafe_allow_html=True)
     results = sorted_findings(report.get("rows", []))
+    plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(
-        card(LABELS[key][0], item, key) for key, item in results) + '</div>', unsafe_allow_html=True)
+        card(LABELS[key][0], item, key, evidence_plots=plots.get(key, []))
+        for key, item in results) + '</div>', unsafe_allow_html=True)
     with st.expander("File details"):
         info = meta.get("file_history", {}).get("facts", {})
         bits = info.get("bitrate_kbps")

@@ -4,3 +4,4 @@ scipy>=1.13,<2
 yt-dlp[default]>=2025.11.12
 deno>=2.3,<3
 mutagen>=1.47,<2
+matplotlib>=3.8,<4
