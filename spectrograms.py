@@ -214,34 +214,231 @@ def _window_score(section,kind,target):
     return 0
 
 
-def make_evidence_charts(sections, findings, original_rate):
-    """Produce small base64 PNG snippets for the relevant result cards.
 
-    sections holds <=4 bounded excerpts from *this upload*. No audio is returned
-    to session state, only the charts. Missing/unsupported bands are omitted.
+
+def render_peak_evidence(audio, kind, start_seconds=0.0, original_rate=44100,
+                         target=None, mark_peak=True):
+    """Plot frequency-spectrum *peaks/troughs*, not time-frequency heatmaps.
+
+    Signal strength is actual median Welch PSD; guides appear as text/x-axis
+    labels outside the trace. A highest bin is not labelled a detection.
     """
-    if not sections:
-        return {}
+    audio=np.asarray(audio)
+    if audio.ndim not in (1,2) or len(audio)<AUDIO_RATE*5:
+        raise ValueError('At least five seconds of real audio are needed.')
+    specs={
+        'mains':[(42,69,'50 / 60 Hz fundamentals',[(50,'50 Hz'),(60,'60 Hz')]),
+                 (94,128,'100 / 120 Hz harmonics',[(100,'100 Hz'),(120,'120 Hz')])],
+        'tv':[(15495,15855,'525- / 625-line scanning tone',[(15625,'625-line'),(15734.26,'525-line')])],
+        'fm':[(18775,19225,'19,000 Hz FM-stereo pilot',[(19000,'FM pilot')])],
+        'ndr':[(9375,10625,'10 kHz notch — look for a trough',[(10000,'10 kHz')])],
+    }
+    if kind not in specs: raise ValueError('Unsupported peak-plot type.')
+    if kind=='tv' and original_rate < 31700:
+        raise ValueError('The source rate cannot preserve the TV band.')
+    if kind=='fm' and original_rate < 38470:
+        raise ValueError('The source rate cannot preserve the full FM pilot band.')
+    if kind=='ndr' and original_rate < 22500:
+        raise ValueError('The source rate cannot preserve the notch band.')
+    selected=float(target) if target is not None else {'mains':60,'tv':15734.26,'fm':19000,'ndr':10000}[kind]
+    y,channel=_pick_channel(audio,selected,kind)
+    if kind=='mains':
+        y=signal.resample_poly(y,20,441);fs=2000;window=min(len(y),12000)
+        oversample=1
+    else:
+        fs=AUDIO_RATE;window=min(len(y),65536)
+        oversample=2
+    freq,power=signal.welch(y,fs=fs,nperseg=window,noverlap=window//2,
+                            nfft=window*oversample,window='hann',
+                            scaling='spectrum',average='median')
+    db=10*np.log10(np.maximum(power,1e-24))
+    ranges=specs[kind]
+    rows=len(ranges)
+    fig=Figure(figsize=(8.7,3.8 if rows==1 else 5.7),dpi=112,facecolor=PAPER)
+    axes=fig.subplots(rows,1)
+    if rows==1: axes=[axes]
+    for ax,(lo,hi,title,guides) in zip(axes,ranges):
+        mask=(freq>=lo)&(freq<=hi)
+        ff=freq[mask]; vv=db[mask]
+        if len(ff)<5: raise ValueError('Insufficient spectral resolution.')
+        line='#157DC6' if kind!='ndr' else '#9A3C9C'
+        # Levels remain unwhitened: no per-frequency gain that could invent a peak.
+        ax.plot(ff,vv,lw=1.7,color=line)
+        bottom=max(float(np.percentile(vv,3))-3,float(np.max(vv))-88)
+        ceiling=float(np.max(vv))+7
+        ax.fill_between(ff,vv,bottom,color=line,alpha=.10)
+        ax.set_xlim(lo,hi);ax.set_ylim(bottom,ceiling)
+        ax.set_ylabel('Level (dB)',fontsize=9,color=MUTED)
+        ax.set_title(title,loc='left',fontsize=11,fontweight='bold',color=INK,pad=9)
+        ax.set_xlabel('Frequency (Hz)',fontsize=9,color=MUTED)
+        ax.tick_params(colors=MUTED,labelsize=8)
+        ax.set_facecolor('#F8FAFF')
+        for side in ax.spines.values():side.set_color('#CBD7E5')
+        # These reference frequencies are only labelled *below* the curve.
+        ticks=[lo]+[hz for hz,_ in guides]+[hi]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([f'{hz:,.0f}' for hz in ticks])
+        for txt,hz in zip(ax.get_xticklabels(),ticks):
+            if any(abs(hz-r)<.001 for r,_ in guides):
+                txt.set_color('#007C88');txt.set_fontweight('bold')
+        # Identify the actual measured extreme without drawing an indicator
+        # across the trace. A spike in noise is not automatically a detection.
+        target_i=np.argmin(vv) if kind=='ndr' else np.argmax(vv)
+        hz=float(ff[target_i]); amp=float(vv[target_i])
+        if mark_peak:
+            ax.scatter([hz],[amp],s=23,c='#ED8A20',zorder=3)
+            yoffset=-14 if kind=='ndr' else 11
+            ax.annotate(f'{"Lowest" if kind=="ndr" else "Highest"} bin: {hz:,.1f} Hz',
+                        xy=(hz,amp),xytext=(0,yoffset),textcoords='offset points',
+                        fontsize=8,color='#384960',ha='center',va='bottom' if yoffset>0 else 'top')
+    fig.subplots_adjust(left=.12,right=.96,bottom=.20 if rows==1 else .13,
+                        top=.86 if rows==1 else .92,hspace=.53)
+    duration=len(audio)/AUDIO_RATE
+    mark_note=('Orange marker identifies the strongest measured bin (weakest for a notch); '
+               'that maximum/minimum is NOT by itself a source-specific detection. '
+               if mark_peak else
+               'No peak is highlighted because the detector found no supported signal. ')
+    caption=(f'Real audio peak profile: {start_seconds:.0f}–{start_seconds+duration:.0f}s, '
+             f'{channel}. '+mark_note+
+             'Turquoise frequency ticks are reference labels on the axis, not lines '
+             'drawn over the data. Median Welch power, unwhitened dB scale; '
+             'peaks must be judged with persistence and nearby noise.')
+    return {'png':_figure_bytes(fig),'caption':caption,'kind':kind,
+            'channel':channel,'section_start_s':start_seconds}
+
+
+def render_phase_evidence(audio):
+    """Plot actual normalized cross-correlation at +/-4ms."""
+    if audio.ndim!=2 or audio.shape[1]!=2:
+        raise ValueError('Two channels are required.')
+    x=np.asarray(audio[:AUDIO_RATE*8],float)
+    aa=signal.resample_poly(x[:,0],1,4)
+    bb=signal.resample_poly(x[:,1],1,4)
+    fs=AUDIO_RATE/4
+    sos=signal.butter(3,[150,4500],fs=fs,btype='bandpass',output='sos')
+    aa=signal.sosfiltfilt(sos,aa);bb=signal.sosfiltfilt(sos,bb)
+    aa-=aa.mean();bb-=bb.mean()
+    norm=float(np.linalg.norm(aa)*np.linalg.norm(bb))
+    if norm<1e-10:raise ValueError('Insufficient shared audio')
+    m=int(fs*.004)
+    correlation=signal.correlate(aa,bb,mode='full',method='fft')
+    middle=len(bb)-1
+    curve=correlation[middle-m:middle+m+1]/norm
+    lags=np.arange(-m,m+1)/fs*1000
+    best=int(np.argmax(abs(curve)))
+    fig=Figure(figsize=(8.7,3.3),dpi=112,facecolor=PAPER)
+    ax=fig.subplots()
+    ax.plot(lags,curve,color='#157DC6',lw=1.6)
+    ax.scatter([lags[best]],[curve[best]],color='#EC8B20',s=38,zorder=4)
+    ax.set(xlim=(-4,4),ylim=(-1.08,1.08))
+    ax.set_xlabel('Left relative to right — alignment lag (ms)',color=MUTED)
+    ax.set_ylabel('Cross-correlation',color=MUTED)
+    ax.set_title('Stereo alignment peak',loc='left',color=INK,fontweight='bold')
+    ax.tick_params(colors=MUTED)
+    fig.subplots_adjust(left=.13,right=.97,top=.86,bottom=.21)
+    return {'png':_figure_bytes(fig),'caption':
+             f'Actual channel cross-correlation. Strongest absolute peak: {lags[best]:+.3f} ms, r={curve[best]:+.3f}. '
+             'Off-zero peak can indicate an interchannel delay, not necessarily a tape transfer.'}
+
+
+def render_wow_evidence(track):
+    seconds=np.asarray(track.get('curve_seconds',[]),float)
+    cents=np.asarray(track.get('curve_cents',[]),float)
+    frequencies=np.asarray(track.get('mod_freq_hz',[]),float)
+    levels=np.asarray(track.get('mod_power_db',[]),float)
+    if len(seconds)<20: raise ValueError('No stable reference-tone track.')
+    fig=Figure(figsize=(8.7,4.5),dpi=112,facecolor=PAPER)
+    top,bottom=fig.subplots(2,1,gridspec_kw={'height_ratios':[1.6,1]})
+    top.plot(seconds,cents,color='#167BC0',lw=1.4)
+    top.set_ylabel('Pitch shift (cents)',color=MUTED)
+    top.set_xlabel('Seconds in tracked excerpt',color=MUTED)
+    top.set_title('Measured reference-tone pitch variation',loc='left',fontweight='bold',color=INK)
+    if len(frequencies)>3:
+        bottom.plot(frequencies,levels,color='#A14BA2',lw=1.7)
+        bottom.set_xlim(.3,30)
+        bottom.set_ylabel('Power (dB)',color=MUTED)
+        bottom.set_xlabel('Fluctuation rate (Hz)',color=MUTED)
+    for ax in (top,bottom):
+        ax.tick_params(colors=MUTED,labelsize=8)
+        for side in ax.spines.values():side.set_color('#CBD7E5')
+        ax.set_facecolor('#F8FAFF')
+    fig.subplots_adjust(left=.14,right=.96,bottom=.15,top=.90,hspace=.64)
+    return {'png':_figure_bytes(fig),
+            'caption':f'Actual reference-tone pitch trace ({track["nominal_hz"]:,.2f} Hz nominal) and measured modulation-power peaks. A peak is not proof of any particular transport.'}
+
+
+def render_tuning_evidence(tuning):
+    m=tuning.get('metrics') or {}
+    bins=np.asarray(m.get('bins_cents',[]),float)
+    counts=np.asarray(m.get('offsets_cents',[]),float)
+    if len(bins)<10 or len(counts)!=len(bins):raise ValueError('No tuning votes.')
+    fig=Figure(figsize=(8.7,3.25),dpi=112,facecolor=PAPER)
+    ax=fig.subplots()
+    ax.bar(bins,counts,width=4.5,color='#2384C7',edgecolor='white',linewidth=.3)
+    ax.set_xlim(-50,50)
+    ax.set_title('Pitched spectral-peak votes relative to A440',loc='left',fontweight='bold',color=INK)
+    ax.set_xlabel('Cents below / above equal-tempered note',color=MUTED)
+    ax.set_ylabel('Peak votes',color=MUTED)
+    ax.tick_params(colors=MUTED,labelsize=8)
+    ax.set_xticks([-50,-25,0,25,50]);ax.set_facecolor('#F8FAFF')
+    fig.subplots_adjust(left=.13,right=.97,top=.86,bottom=.25)
+    return {'png':_figure_bytes(fig),
+            'caption':'Votes from real detected pitched spectral peaks. Clustered tuning does not establish a playback-speed error; other temperament and instrument harmonics can bias this estimate.'}
+
+
+def make_evidence_charts(sections, findings, original_rate):
+    """Default to spectra showing actual measured peaks, not spectrogram heatmaps.
+
+    Normal metadata still uses the existing 'spectrograms' key for backwards
+    compatibility with the Streamlit UI. No audio bytes are retained.
+    """
+    if not sections:return {}
     charts={}
     result=dict(findings)
-    kinds=[('Likely power system','mains'),('Radio / TV signals','tv'),('NDR-style 10 kHz dip','ndr')]
+    kinds=[('Likely power system','mains'),('Radio / TV signals','tv'),
+           ('NDR-style 10 kHz dip','ndr')]
+    pilot=result.get('FM stereo pilot') or {}
     broadcast=str((result.get('Radio / TV signals') or {}).get('result',''))
-    # FM has its own 19 kHz view when the analyzer has suggested an FM pilot.
-    if 'FM' in broadcast.upper() and original_rate>=38200:
-        kinds.insert(2,('Radio / TV signals','fm'))
-    power_result=str((result.get('Likely power system') or {}).get('result',''))
-    base = 50 if '50 Hz' in power_result else 60 if '60 Hz' in power_result else None
+    if original_rate>=38470 and pilot:
+        kinds.append(('FM stereo pilot','fm'))
+    elif original_rate>=38470 and 'FM' in broadcast.upper():
+        kinds.append(('Radio / TV signals','fm'))
     for key,kind in kinds:
         if kind=='tv' and original_rate<31700:continue
         if kind=='ndr' and original_rate<22500:continue
         try:
-            section=max(sections,key=lambda s:_window_score(s,kind,base))
-            target = float(base) if kind=='mains' and base else None
-            plot=render_evidence(section['audio'],kind,section['start'],original_rate,target=target)
-            image_data = base64.b64encode(plot['png']).decode('ascii')
-            charts.setdefault(key,[]).append({'image_base64':image_data,'caption':plot['caption'],
-                                               'kind':kind,'start':plot['section_start_s']})
+            section=max(sections,key=lambda section:_window_score(section,kind,None))
+            report=result.get(key) or {}
+            outcome=str(report.get('result',''))
+            confidence=report.get('certainty') in ('Strong','High','Possible','Tentative')
+            supported=bool(confidence and (kind!='tv' or any(x in outcome.upper() for x in ('NTSC','PAL','SECAM','TV'))))
+            if kind=='ndr' and ('no ' in outcome.lower() or 'not ' in outcome.lower()):
+                supported=False
+            target=(50 if '50 Hz' in outcome else 60) if kind=='mains' else (15625 if kind=='tv' and any(w in outcome for w in ('PAL','SECAM')) and 'NTSC' not in outcome else None)
+            peak=render_peak_evidence(section['audio'],kind,section['start'],original_rate,
+                                      target=target,mark_peak=supported)
+            blob=base64.b64encode(peak['png']).decode('ascii')
+            if len(blob)<=400000:
+                charts.setdefault(key,[]).append({'image_base64':blob,'caption':peak['caption'],
+                                                   'kind':kind,'start':peak['section_start_s']})
         except (ValueError,RuntimeError,MemoryError):
-            # A missing chart must never fail a real analysis.
             continue
+    optional=[('Stereo phase / delay','phase',render_phase_evidence),
+              ('Wow and flutter','wow',render_wow_evidence),
+              ('Pitch / musical tuning','tuning',render_tuning_evidence)]
+    for key,measure,renderer in optional:
+        if key not in result:continue
+        for section in sections:
+            evidence=section.get(measure) or {}
+            if measure=='wow' and not evidence.get('curve_seconds'):continue
+            if measure=='tuning' and not evidence.get('metrics',{}).get('bins_cents'):continue
+            if measure=='phase' and not evidence.get('metrics'):continue
+            try:
+                plot=renderer(section['audio'] if measure=='phase' else evidence)
+                blob=base64.b64encode(plot['png']).decode('ascii')
+                if len(blob)>400000:continue
+                charts.setdefault(key,[]).append({'image_base64':blob,'caption':plot['caption'],
+                                                   'kind':measure,'start':section['start']})
+                break
+            except (ValueError,RuntimeError,MemoryError):continue
     return charts

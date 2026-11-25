@@ -1,4 +1,4 @@
-"""AudioCheQ v1.8 - standard two-step upload and legible high-contrast buttons."""
+"""AudioCheQ v2.0 - spectral peaks, FM pilots, phase, speed and wobble."""
 from __future__ import annotations
 
 import html
@@ -57,6 +57,12 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-card details li {margin:6px 0;}
 .ac-card.none details p,.ac-card.none details li {color:#D5DCEA;}
 .ac-card.has-spectrogram {grid-column:1 / -1;}
+.ac-metrics {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;
+ margin:13px 0;padding:10px;background:#FFFFFF80;border-radius:10px;}
+.ac-metric {display:flex;flex-direction:column;font-size:.75rem;line-height:1.34;gap:3px;color:#405570;}
+.ac-metric strong {color:#172D4B;font-size:.84rem;}
+.ac-card.none .ac-metrics {background:#3B465C;}
+.ac-card.none .ac-metric,.ac-card.none .ac-metric strong {color:#E1E8F2;}
 .ac-evidence-intro {margin-top:14px;margin-bottom:8px;color:#254C75;font-weight:850;font-size:.85rem;}
 .ac-card.none .ac-evidence-intro {color:#D8E3F6;}
 .ac-evidence {margin:10px 0 15px;padding:9px;background:#FFFFFF;border:1px solid #AFC5DD;border-radius:13px;}
@@ -115,7 +121,7 @@ st.markdown('''<div class="ac-hero">
  </g>
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
-<p class="ac-intro">Discover clues to a song's source, record speed, broadcast signals and digital file history.</p></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Discover clues to recording origin, pitch, playback speed, phase and broadcast signals.</p></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -153,9 +159,13 @@ LABELS = {
     "Likely audio source": ("Likely origin", "&#9835;"),
     "Vinyl rotation": ("Record speed", "&#9673;"),
     "Likely power system": ("Power region", "&#9889;"),
-    "Radio / TV signals": ("Radio / TV signal", "&#9737;"),
+    "Radio / TV signals": ("TV scanning signals", "&#9737;"),
+    "FM stereo pilot": ("FM stereo pilot (19 kHz)", "&#9687;"),
     "NDR-style 10 kHz dip": ("NDR 10 kHz dip", "&#9836;"),
     "Stereo format": ("Stereo / mono", "&#8644;"),
+    "Stereo phase / delay": ("Stereo phase / delay", "&#8646;"),
+    "Wow and flutter": ("Wow / flutter", "&#8767;"),
+    "Pitch / musical tuning": ("Musical pitch / tuning", "&#9839;"),
     "Digital file history": ("Digital file age", "&#128197;"),
     "Playback speed": ("Playback speed", "&#8635;"),
 }
@@ -170,6 +180,14 @@ def display_result(key, item):
             return "Uncertain"
         if key == "Radio / TV signals":
             return "No signal found"
+        if key == "FM stereo pilot":
+            return "No pilot detected"
+        if key == "Wow and flutter":
+            return "No measurable wobble" if str(item.get('certainty')) == 'Not measurable' else "No clear wobble"
+        if key == "Pitch / musical tuning":
+            return "Tuning unclear"
+        if key == "Stereo phase / delay":
+            return raw
         if key == "NDR-style 10 kHz dip":
             return "No 10 kHz dip"
         if key == "Possible tape dropouts":
@@ -228,6 +246,10 @@ def why(key, item):
             "Stereo format": "The channels could not be distinguished reliably.",
             "Digital file history": "No trustworthy encoder version or encoding-date tag was identified.",
             "Playback speed": "Overall speed needs a known reference tone or comparison recording.",
+            "FM stereo pilot": "No stable 19,000 Hz FM stereo pilot was resolved above adjacent noise.",
+            "Wow and flutter": "No sufficiently steady reference tone was available to measure periodic speed variation.",
+            "Stereo phase / delay": "Channel phase and delay need two usable distinct channels.",
+            "Pitch / musical tuning": "No repeatable multi-note tuning pattern was established against A440.",
         }
         note = detail or defaults.get(key, "The audio did not provide enough evidence.")
         if key == "Likely power system":
@@ -240,12 +262,35 @@ def why(key, item):
             note += " Random record crackle can still indicate vinyl without revealing the RPM."
         elif key == "Digital file history":
             note += " Track-year metadata is not evidence of when this file was encoded."
+        elif key == "FM stereo pilot":
+            note += (" Transmitters use a 19,000 ±2 Hz synchronization pilot, but"
+                     " FM receivers usually suppress it. The detector requires a narrow"
+                     " prominent line with persistence across half-windows; non-detection"
+                     " cannot exclude a radio source. Source Nyquist and encoding cutoffs matter.")
+        elif key == "Wow and flutter":
+            note += (" Speed variation requires a tracked sustained reference tone;"
+                     " ordinary vocals may contain vibrato and cannot establish transport speed.")
+        elif key == "Stereo phase / delay":
+            note += (" Phase is evaluated from correlation at zero lag and at ±4 ms,"
+                     " with 80–450, 450–2,000 and 2,000–4,500 Hz channel comparisons.")
+        elif key == "Pitch / musical tuning":
+            note += (" Equal-tempered A440 is only a musical convention, not evidence"
+                     " of the intended original pitch or playback speed.")
+        elif key == "Playback speed":
+            note += (" A confirmed reference must have been present BEFORE any"
+                     " suspected playback-speed change; later-introduced hum or pilots"
+                     " cannot measure the original recording speed.")
         return note
 
     if key == "Likely audio source":
         if item.get("fallback_guess"):
             return "No reliable source-specific clue was measured. Digital is a placeholder best guess, NOT evidence that the original recording was digital. A clean tape or record can sound the same."
-        return "The source estimate combines clicks, surface noise, tape interruptions, broadcast tones and bandwidth. The score ranks clues; it is not a calibrated probability."
+        return ((detail + " ") if detail else "") + (
+            "The source classifier weights: repeating clicks at rotation intervals,"
+            " median surface-noise crackle, brief level interruptions, persistent"
+            " 19 kHz FM/TV scanning lines, high-frequency cutoff and stereo/mono"
+            " structure. Sources can occur in sequence (FM to cassette to MP3)."
+            " A clue-score share is NOT a calibrated probability or proof of master provenance.")
     if key == "Vinyl rotation":
         rpm = re.search(r"(33[⅓ ]*|45|78)\s*RPM", raw, re.I)
         ref = ""
@@ -258,16 +303,23 @@ def why(key, item):
         return (detail or "Persistent narrowband power-frequency energy was measured.") + (
             " The analyzer checks 50/60 Hz and their harmonics (100, 120, 150, 180 Hz and higher) across repeated time windows."
             " Multiple steady lines support a mains-hum interpretation better than one isolated bass note."
+            " The scanner uses 8-second periodograms, tests approximately 60% frame persistence,"
+            " and checks peak-to-local-noise ratios; the shared 300 Hz harmonic cannot separate grid types."
             " Hum can enter during recording, copying or digitization, so this does not establish studio location.")
     if key == "Radio / TV signals":
         return (detail or "A narrow broadcast-frequency tone was measured.") + (
             " Nominal reference frequencies: 15,734.26 Hz for 525-line NTSC-type equipment,"
             " 15,625 Hz for 625-line PAL/SECAM-type equipment, and 19,000 Hz for an FM stereo pilot."
+            " A peak candidate needs at least ~12 dB local prominence and persistence in two halves"
+            " of an excerpt; frequency offsets and channel selection may vary by file."
             " A persistent narrow peak supports interference somewhere in the recording chain, not necessarily at the original studio.")
     if key == "NDR-style 10 kHz dip":
         return (detail or "A narrow spectral notch was measured.") + (
             " This feature is a local reduction in energy near 10 kHz, seen as a dark band"
-            " and a trough in the frequency profile. It resembles the NDR-related clue investigated"
+            " and a trough in the frequency profile. The detector compares the candidate"
+            " against a wide local-median spectral baseline, checks at least 60% frame"
+            " recurrence and demands the dip exceed control-region fluctuations."
+            " It resembles the NDR-related clue investigated"
             " during The Most Mysterious Song search but cannot identify NDR by itself.")
     if key == "Stereo format":
         return (detail or "Channel structure was measured.") + (
@@ -277,10 +329,41 @@ def why(key, item):
         return (detail or "Available encoder metadata was inspected.") + (
             " Encoder versions can establish an earliest plausible encoding year."
             " Tags may be edited or rewritten, and the recording itself may be decades older.")
+    if key == "FM stereo pilot":
+        return (detail or "The 19 kHz region was examined.") + (
+            " FM stereo uses a nominal 19 kHz pilot to reconstruct the suppressed"
+            " 38 kHz stereo difference subcarrier at the receiver. A normal radio"
+            " audio output may filter the pilot completely; a 15 kHz audio cutoff is"
+            " supporting context only. The 38 kHz multiplex signal is NOT directly"
+            " examined because AudioCheQ currently decodes audio at 44.1 kHz.")
+    if key == "Stereo phase / delay":
+        return (detail or "The channels were compared.") + (
+            " A polarity inversion makes r negative, while a short fixed delay"
+            " shifts the strongest cross-correlation away from zero lag."
+            " Compare the 80–450, 450–2,000 and 2,000–4,500 Hz bands;"
+            " mixing, microphones and digital processing can generate the same pattern."
+            " Delay resolution is about 0.091 ms at the 11,025 Hz analysis rate."
+            " Such a result does not diagnose tape-head azimuth by itself.")
+    if key == "Wow and flutter":
+        return (detail or "A stable tonal reference was tracked.") + (
+            " A complex baseband demodulator samples the instantaneous phase"
+            " of a previously confirmed FM/TV/hum tone, then measures cents RMS"
+            " and power at 0.3–30 Hz pitch-modulation rates. Slow variation is wow;"
+            " fast modulation is flutter. The 0.556, 0.750 and 1.300 Hz"
+            " rotation rates are possibilities only, not automatic vinyl identification.")
+    if key == "Pitch / musical tuning":
+        return (detail or "Pitched spectral peaks were measured.") + (
+            " STFT spectral peaks are mapped to their nearest A440 equal-tempered"
+            " semitone, and the algorithm checks whether enough distinct notes"
+            " cluster around a common cents displacement. This is an inferred"
+            " tuning bias, not a verified playback-speed correction.")
     if key == "Playback speed":
         return (detail or "A pitch or timing reference was considered.") + (
-            " Absolute speed cannot be established from musical pitch alone without a trusted reference."
-            " Wow/flutter fluctuations are different from a constant playback-speed offset.")
+            " Frequency ratio r = observed / nominal; apparent transfer error"
+            " is (r - 1) × 100%, and the reverse correction is (1/r - 1) × 100%."
+            " Confirmed reference families that disagree by over 0.2% are rejected."
+            " The reference must predate the transfer error, otherwise this is only"
+            " a conditional estimate; uniform pitch offset and wow/flutter are distinct.")
     return detail or "The measured signal supports this interpretation."
 
 
@@ -329,15 +412,46 @@ def card(label, item, key=None, evidence_plots=None):
             bits.append(enc[:38])
         if bits:
             sub = f'<div class="ac-sub">{html.escape(" · ".join(bits))}</div>'
+    # Only observed scalar measurements are shown. Never present derived
+    # scores, reference ticks or absent arrays as detected frequencies.
+    metrics = item.get('metrics') if isinstance(item.get('metrics'),dict) else {}
+    metric_labels = {
+        'measured_hz':'Measured pilot (Hz)', 'deviation_hz':'Pilot offset (Hz)',
+        'prominence_db':'Local prominence (dB)', 'relative_db':'Level vs RMS² (dB)',
+        'strong_sections':'Strong excerpts','sampled_sections':'Sampled excerpts',
+        'zero_corr':'Stereo r at zero lag','aligned_corr':'Best aligned r',
+        'delay_ms':'Interchannel delay (ms)','side_mid_db':'Side / mid (dB)',
+        'speed_error_percent':'Apparent speed error (%)',
+        'correction_percent':'Conditional correction (%)',
+        'pitch_offset_cents':'Reference pitch shift (cents)',
+        'deviation_cents':'A440 tuning bias (cents)',
+        'hypothetical_correction_percent':'Tuning-only hypothetical speed (%)',
+        'votes':'Spectral-peak votes', 'frames':'Pitched frames',
+        'fraction':'Within tuning cluster (fraction)',
+        'notes':'Distinct semitone bins',
+        'rms_cents':'Pitch wobble RMS (cents)',
+        'rate_hz':'Strongest modulation rate (Hz)',
+        'modulation_amplitude_cents':'Modulation peak (cents)',
+        'tone_hz':'Tracked tone (Hz)',
+        'nominal_hz':'Reference frequency (Hz)',
+    }
+    scalar_lines=[]
+    for metric,title in metric_labels.items():
+        metric_value=metrics.get(metric)
+        if isinstance(metric_value,(int,float)) and not isinstance(metric_value,bool):
+            scalar_lines.append('<div class="ac-metric"><span>'+html.escape(title)+'</span>'+
+                                '<strong>'+html.escape(str(metric_value))+'</strong></div>')
+    if scalar_lines:
+        details_html += '<div class="ac-metrics">'+''.join(scalar_lines)+'</div>'
     if evidence_plots:
-        details_html += '<div class="ac-evidence-intro">Measured spectrogram · selected excerpt</div>'
+        details_html += '<div class="ac-evidence-intro">Measured audio evidence · peak plots</div>'
         for entry in evidence_plots[:2]:
             img = entry.get('image_base64', '')
             if not isinstance(img, str) or not re.fullmatch(r'[A-Za-z0-9+/=]{100,400000}', img):
                 continue
             caption = html.escape(str(entry.get('caption','')))
             details_html += ('<figure class="ac-evidence">'
-                             '<img loading="lazy" alt="Actual audio frequency spectrogram" '
+                             '<img loading="lazy" alt="Measured audio evidence chart" '
                              f'src="data:image/png;base64,{img}" />'
                              f'<figcaption>{caption}</figcaption>'
                              '</figure>')
@@ -369,6 +483,10 @@ def summary(found):
         statements.append("The source is hard to distinguish.")
     if meaningful(found.get("NDR-style 10 kHz dip")):
         statements.append("A 10 kHz dip was found.")
+    if meaningful(found.get("FM stereo pilot")):
+        statements.append("A separate 19 kHz FM pilot clue was found.")
+    if meaningful(found.get("Playback speed")):
+        statements.append("A conditional playback-speed estimate is available.")
     return " ".join(statements)
 
 

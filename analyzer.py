@@ -1,4 +1,4 @@
-"""AudioCheck v1.2: combined source inference and measured clues.
+"""AudioCheQ v2.0: source, signal-chain, pitch and transport clues.
 
 Measures evidence, not proof of an original recording medium or location.
 Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
@@ -16,6 +16,8 @@ import tempfile
 import numpy as np
 from scipy import ndimage, signal
 from file_history import inspect_file
+from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
+                       reference_candidates, speed_assessment)
 
 MAX_SECONDS = 300.0
 MIN_SECONDS = 4.0
@@ -245,11 +247,21 @@ def _spectrum_window(x, original_rate):
         electrical[base]=max((r[base] for r in reports),
             key=lambda r:(r['count'],r['weak'],r['snr']))
     broadcast={}
-    specs=(('FM stereo pilot',19000.0,25.0),
+    specs=(('FM stereo pilot',19000.0,180.0),
            ('625-line TV',15625.0,30.0),
            ('525-line TV',15734.26,30.0))
     for name,target,tol in specs:
         attempts=[_scan_broadcast_tone(ch,target,tol,original_rate) for ch in channels]
+        if name == 'FM stereo pilot':
+            # A wider ±180-Hz speed-offset search examines many FFT bins:
+            # stronger prominence is required to avoid random-noise maxima.
+            for candidate in attempts:
+                if candidate:
+                    candidate['pass'] = bool(candidate['pass'] and candidate['snr'] >= 18)
+                    candidate['tentative'] = bool(candidate['persistent'] and
+                                                  candidate['snr'] >= 15 and
+                                                  candidate['relative'] >= -106)
+            attempts=[a for a in attempts if a and a['tentative']]
         broadcast[name]=max((m for m in attempts if m),
             key=lambda m:(m['pass'],m['tentative'],m['snr']),default=None)
     mono=np.mean(x,axis=1,dtype=np.float64)
@@ -659,6 +671,99 @@ def _consolidate_broadcast(windows):
         ' '.join(details)+' This is a clue to equipment or later copying, not proof of the original studio country.')
 
 
+
+def _consolidate_fm_pilot(windows, original_rate):
+    """Independent FM-pilot report (formerly bundled with the TV card)."""
+    eligible=original_rate >= 38470  # Nyquist must include the full ±180-Hz search band.
+    reports=[w.get('broadcast',{}).get('FM stereo pilot') for w in windows]
+    strong=[r for r in reports if r and r.get('pass')]
+    weak=[r for r in reports if r and r.get('tentative') and not r.get('pass')]
+    measured=strong or weak
+    if not eligible:
+        return verdict('19 kHz unavailable','Not measurable',
+            f'Original sample rate {original_rate:,} Hz gives a Nyquist limit of {original_rate/2:,.0f} Hz; the 19 kHz pilot search needs preserved high-frequency content.')
+    if not measured:
+        return verdict('No pilot found','Not detected',
+            'A 19,000 Hz FM-stereo pilot must be narrow, locally prominent and stable in both halves of an excerpt. No candidate met those thresholds. A normal FM receiver often removes its pilot; non-detection does NOT exclude FM.')
+    best=max(measured,key=lambda m:(m.get('pass',False),m['snr']))
+    obs=float(np.median([r['freq'] for r in measured]))
+    deviation=obs-19000
+    mean_snr=float(np.median([r['snr'] for r in measured]))
+    relative=float(np.median([r['relative'] for r in measured]))
+    reliable=bool((len(strong)>=2 or (len(windows)==1 and strong)) and mean_snr>=16)
+    confidence='High' if reliable else 'Possible' if strong else 'Tentative'
+    label='FM pilot likely' if reliable else 'Possible FM pilot'
+    detail=(f'Observed a narrow line at {obs:.2f} Hz (standard 19,000.00 Hz; offset {deviation:+.2f} Hz). '
+            f'Median local peak prominence {mean_snr:.1f} dB, level {relative:.1f} dB '
+            f'relative to channel RMS²; {len(strong)} strong and {len(weak)} tentative '
+            f'excerpts among {len(windows)} sampled sections. Strong FM evidence means at least 18 dB '
+            'above the ±7–55 Hz local sidebands, adequate relative level, and persistence '
+            'in both half-sections. The transmitter reference tolerance is roughly ±2 Hz; '
+            'a shifted line might reflect copying speed, clock error or a different tone. '
+            'A receiver usually filters out its 19 kHz pilot, so absence does not rule '
+            'out FM. 38 kHz suppressed subcarrier is NOT measured in this 44.1 kHz analysis path.')
+    return {'result':label,'certainty':confidence,'detail':detail,
+            'metrics':{'measured_hz':round(obs,3),'nominal_hz':19000,
+                       'deviation_hz':round(deviation,3),'prominence_db':round(mean_snr,1),
+                       'relative_db':round(relative,1),'strong_sections':len(strong),
+                       'possible_sections':len(weak),'sampled_sections':len(windows)}}
+
+
+def _consolidate_phase(windows, channels):
+    if channels == 1:
+        return stereo_phase(np.empty((0,2)),channels=1)
+    valid=[w['phase'] for w in windows if w.get('phase') and w['phase'].get('metrics')]
+    if not valid:
+        return verdict('Cannot assess phase','Not measurable','Not enough correlated channel content to estimate a timing relationship.')
+    # A multi-section conclusion must not hide inconsistent channel structure.
+    names=[x['result'] for x in valid]
+    best=max(set(names),key=lambda n:(names.count(n),-names.index(n)))
+    typical=next(x for x in valid if x['result']==best)
+    valid_corr=[x['metrics']['zero_corr'] for x in valid if x['metrics']['zero_corr'] is not None]
+    r=float(np.median(valid_corr)) if valid_corr else None
+    delay=float(np.median([v['metrics']['delay_ms'] for v in valid]))
+    conflict=len(set(names))>1
+    detail=(f'Measured {len(valid)} excerpt(s); median zero-lag stereo correlation '
+            f'{r:+.3f} and median strongest short interchannel lag {delay:+.3f} ms. '
+            f'Most common channel classification: {best}. ' +
+            ('Channel behaviour changes between excerpts; see the separate peak/delay plot. ' if conflict else '')+
+            typical['detail'])
+    return {'result':best if not conflict else f'{best} (varies)',
+            'certainty':'Tentative' if conflict else typical['certainty'],
+            'detail':detail,'metrics':{**typical['metrics'],'sampled_sections':len(valid),
+                                      'median_zero_corr':round(r,4) if r is not None else None,
+                                      'median_delay_ms':round(delay,4)}}
+
+
+def _consolidate_tuning(windows):
+    known=[w['tuning'] for w in windows if w.get('tuning',{}).get('metrics',{}).get('deviation_cents') is not None]
+    if not known:
+        return verdict('No coherent tuning clue','Not measurable',
+            'The analyzer could not find a repeatable semitone-grid offset across enough pitched spectral peaks. Percussion and noise do not establish tuning.')
+    measurements=[r['metrics']['deviation_cents'] for r in known]
+    if max(measurements)-min(measurements)>18:
+        return verdict('Tuning varies across excerpts','Unclear',
+            'Pitched-note estimates disagree by more than 18 cents between excerpts; a uniform speed change is not supported.')
+    best=max(known,key=lambda r:r['metrics']['votes'])
+    return {**best,'detail':f'{len(known)} sampled excerpt(s) supported a comparable tuning pattern. '+best['detail']}
+
+
+def _consolidate_wow(windows):
+    measured=[w['wow'] for w in windows if w.get('wow')]
+    if not measured:
+        return verdict('No trackable reference','Not measurable',
+            'No sufficiently prominent, persistent hum, FM pilot or TV-scanning tone could be phase-tracked. Musical vibrato cannot safely substitute for a stable transport reference.')
+    periodic=[w for w in measured if w['result'] in ('Periodic wow','Possible flutter')]
+    if periodic:
+        best=max(periodic,key=lambda w:w['prominence_db'])
+    else:
+        best=max(measured,key=lambda w:w['rms_cents'])
+    info={k:v for k,v in best.items() if k not in ('curve_seconds','curve_cents','mod_freq_hz','mod_power_db')}
+    info['metrics']={k:best[k] for k in ('rms_cents','rate_hz','modulation_amplitude_cents',
+                                         'prominence_db','tone_hz','nominal_hz') if k in best}
+    info['detail']=(f'{len(measured)} of {len(windows)} sampled excerpts provided usable reference-tone tracks. '+info['detail'])
+    return info
+
 def _consolidate_ndr(windows):
     entries=[w.get('ndr') for w in windows]
     strong=[r for r in entries if r and r['supported']]
@@ -997,12 +1102,21 @@ def analyze_path(path, file_name=None, *, charts=False):
         fm = air.get("FM stereo pilot")
         pilot_jitter = (_pilot_variation_hz(audio)
                         if fm and fm["pass"] and fm.get("persistent") else None)
+        phase = stereo_phase(audio, metadata['channels'])
+        tuning = pitch_tuning(audio)
+        preview = {'mains':mains,'broadcast':air}
+        refs = reference_candidates([preview])
+        refs.sort(key=lambda r:(r['reference_grade'],r['prominence_db']),reverse=True)
+        wobble = (track_reference_tone(audio,refs[0]['observed'],
+                                       refs[0]['nominal'],refs[0]['prominence_db'])
+                  if refs else None)
         analyzed.append({"vinyl":_vinyl_window(audio), "surface":_surface_noise_window(audio), "mains":mains,
                          "broadcast":air, "cutoff":cutoff,
                          "bandwidth_feature": _bandwidth_window(audio, metadata["input_rate"]),
                          "dropouts":_dropout_candidates(audio),
                          "clipped":float(np.mean(np.abs(audio) >= .998)),
                          "pilot_jitter":pilot_jitter, "stereo_corr":stereo_corr,
+                         "phase":phase,"tuning":tuning,"wow":wobble,
                          "ndr":_ndr_notch_window(audio, metadata["input_rate"])})
         if charts:
             # Bounded real excerpts; retained temporarily only until plots render.
@@ -1015,6 +1129,7 @@ def analyze_path(path, file_name=None, *, charts=False):
                 "start": start + offset / SAMPLE_RATE,
                 "mains": mains, "broadcast": air,
                 "ndr": analyzed[-1]["ndr"],
+                "phase":phase, "tuning":tuning, "wow":wobble,
             })
         analyzed_seconds += len(audio)/SAMPLE_RATE
         del audio # Avoid keeping 100+ MB of decoded audio in RAM.
@@ -1025,6 +1140,11 @@ def analyze_path(path, file_name=None, *, charts=False):
     electrical = _consolidate_electrical(analyzed)
     broadcast = _consolidate_broadcast(analyzed)
     ndr = _consolidate_ndr(analyzed)
+    pilot = _consolidate_fm_pilot(analyzed,metadata['input_rate'])
+    phase_summary = _consolidate_phase(analyzed,metadata['channels'])
+    tuning_summary = _consolidate_tuning(analyzed)
+    speed = speed_assessment(analyzed,tuning_summary)
+    wow_summary = _consolidate_wow(analyzed)
     diag = _diagnostics(analyzed)
     # Source guess combines measured disc/tape/FM/bandwidth clues rather than
     # duplicating surface crackle and dropouts as primary result cards.
@@ -1042,11 +1162,14 @@ def analyze_path(path, file_name=None, *, charts=False):
         ('Vinyl rotation',rotation),
         ('Likely power system',electrical),
         ('Radio / TV signals',broadcast),
+        ('FM stereo pilot',pilot),
         ('NDR-style 10 kHz dip',ndr),
         ('Disc surface noise',surface),
         ('Possible tape dropouts',dropout),
-        ('Playback speed',verdict('No reliable reference','Not measurable',
-            'The recording cannot be judged uniformly fast or slow without a trustworthy speed reference.')),
+        ('Playback speed',speed),
+        ('Pitch / musical tuning',tuning_summary),
+        ('Wow and flutter',wow_summary),
+        ('Stereo phase / delay',phase_summary),
         ('Audio bandwidth',bandwidth),
         ('Digital file history',metadata['file_history']),
         ('Stereo format',stereo),
