@@ -11,7 +11,7 @@ from io import BytesIO
 import math
 
 import numpy as np
-from scipy import signal
+from scipy import signal, ndimage
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
@@ -217,7 +217,7 @@ def _window_score(section,kind,target):
 
 
 def render_peak_evidence(audio, kind, start_seconds=0.0, original_rate=44100,
-                         target=None, mark_peak=True):
+                         target=None, mark_peak=True, notch_info=None):
     """Plot frequency-spectrum *peaks/troughs*, not time-frequency heatmaps.
 
     Signal strength is actual median Welch PSD; guides appear as text/x-axis
@@ -231,7 +231,7 @@ def render_peak_evidence(audio, kind, start_seconds=0.0, original_rate=44100,
                  (94,128,'100 / 120 Hz harmonics',[(100,'100 Hz'),(120,'120 Hz')])],
         'tv':[(15495,15855,'525- / 625-line scanning tone',[(15625,'625-line'),(15734.26,'525-line')])],
         'fm':[(18775,19225,'19,000 Hz FM-stereo pilot',[(19000,'FM pilot')])],
-        'ndr':[(9375,10625,'10 kHz notch — look for a trough',[(10000,'10 kHz')])],
+        'ndr':[(9280,10720,'10 kHz broadcast-filter dip — look for a trough',[(10000,'10 kHz')])],
     }
     if kind not in specs: raise ValueError('Unsupported peak-plot type.')
     if kind=='tv' and original_rate < 31700:
@@ -246,11 +246,12 @@ def render_peak_evidence(audio, kind, start_seconds=0.0, original_rate=44100,
         y=signal.resample_poly(y,20,441);fs=2000;window=min(len(y),12000)
         oversample=1
     else:
-        fs=AUDIO_RATE;window=min(len(y),65536)
-        oversample=2
+        fs=AUDIO_RATE
+        window=min(len(y),16384 if kind=='ndr' else 65536)
+        oversample=1 if kind=='ndr' else 2
     freq,power=signal.welch(y,fs=fs,nperseg=window,noverlap=window//2,
                             nfft=window*oversample,window='hann',
-                            scaling='spectrum',average='median')
+                            scaling='density' if kind=='ndr' else 'spectrum',average='median')
     db=10*np.log10(np.maximum(power,1e-24))
     ranges=specs[kind]
     rows=len(ranges)
@@ -261,12 +262,16 @@ def render_peak_evidence(audio, kind, start_seconds=0.0, original_rate=44100,
         mask=(freq>=lo)&(freq<=hi)
         ff=freq[mask]; vv=db[mask]
         if len(ff)<5: raise ValueError('Insufficient spectral resolution.')
-        line='#157DC6' if kind!='ndr' else '#9A3C9C'
+        line='#157DC6' if kind!='ndr' else '#853DB4'
+        if kind=='ndr':
+            # The analysis itself smooths a median Welch spectrum over 6 Hz.
+            # Plot this shape instead of misleading isolated low FFT bins.
+            vv=ndimage.gaussian_filter1d(vv,6/max(float(ff[1]-ff[0]),.01))
         # Levels remain unwhitened: no per-frequency gain that could invent a peak.
-        ax.plot(ff,vv,lw=1.7,color=line)
+        ax.plot(ff,vv,lw=2.2 if kind=='ndr' else 1.7,color=line)
         bottom=max(float(np.percentile(vv,3))-3,float(np.max(vv))-88)
         ceiling=float(np.max(vv))+7
-        ax.fill_between(ff,vv,bottom,color=line,alpha=.10)
+        ax.fill_between(ff,vv,bottom,color=line,alpha=.09)
         ax.set_xlim(lo,hi);ax.set_ylim(bottom,ceiling)
         ax.set_ylabel('Level (dB)',fontsize=9,color=MUTED)
         ax.set_title(title,loc='left',fontsize=11,fontweight='bold',color=INK,pad=9)
@@ -283,26 +288,38 @@ def render_peak_evidence(audio, kind, start_seconds=0.0, original_rate=44100,
                 txt.set_color('#007C88');txt.set_fontweight('bold')
         # Identify the actual measured extreme without drawing an indicator
         # across the trace. A spike in noise is not automatically a detection.
-        target_i=np.argmin(vv) if kind=='ndr' else np.argmax(vv)
-        hz=float(ff[target_i]); amp=float(vv[target_i])
-        if mark_peak:
+        if kind=='ndr':
+            measured=(notch_info or {}).get('freq')
+            if mark_peak and isinstance(measured,(int,float)) and lo <= measured <= hi:
+                yval=float(np.interp(measured,ff,vv))
+                ax.scatter([measured],[yval],s=34,c='#ED8A20',
+                           edgecolors='white',linewidth=.8,zorder=5)
+                # Label with the caption rather than covering the spectrum.
+        elif mark_peak:
+            target_i=int(np.argmax(vv))
+            hz=float(ff[target_i]); amp=float(vv[target_i])
             ax.scatter([hz],[amp],s=23,c='#ED8A20',zorder=3)
-            yoffset=-14 if kind=='ndr' else 11
-            ax.annotate(f'{"Lowest" if kind=="ndr" else "Highest"} bin: {hz:,.1f} Hz',
-                        xy=(hz,amp),xytext=(0,yoffset),textcoords='offset points',
-                        fontsize=8,color='#384960',ha='center',va='bottom' if yoffset>0 else 'top')
+            ax.annotate(f'Highest bin: {hz:,.1f} Hz',
+                        xy=(hz,amp),xytext=(0,11),textcoords='offset points',
+                        fontsize=8,color='#384960',ha='center',va='bottom')
     fig.subplots_adjust(left=.12,right=.96,bottom=.20 if rows==1 else .13,
                         top=.86 if rows==1 else .92,hspace=.53)
     duration=len(audio)/AUDIO_RATE
-    mark_note=('Orange marker identifies the strongest measured bin (weakest for a notch); '
-               'that maximum/minimum is NOT by itself a source-specific detection. '
-               if mark_peak else
-               'No peak is highlighted because the detector found no supported signal. ')
-    caption=(f'Real audio peak profile: {start_seconds:.0f}–{start_seconds+duration:.0f}s, '
-             f'{channel}. '+mark_note+
-             'Turquoise frequency ticks are reference labels on the axis, not lines '
-             'drawn over the data. Median Welch power, unwhitened dB scale; '
-             'peaks must be judged with persistence and nearby noise.')
+    if kind=='ndr':
+        measured=(notch_info or {}).get('freq')
+        found=bool(mark_peak and isinstance(measured,(int,float)))
+        mark_note=(f'Orange point marks a verified repeated dip near {measured:,.0f} Hz; '
+                   f'roughly {(notch_info or {}).get("depth_db",0):.1f} dB below neighbouring audio. '
+                   if found else 'No supported recurring notch was found in this excerpt. ')
+        mark_note+='Purple curve averages the power at each frequency; lower means quieter. '
+    else:
+        mark_note=('Orange point marks the strongest measured bin; this alone does not prove a source. '
+                   if mark_peak else 'No peak highlighted: detector did not confirm a signal. ')
+    caption=(f'Real audio, measured from {start_seconds:.0f}–{start_seconds+duration:.0f} s ({channel}). '
+             + mark_note +
+             ('The 10,000 Hz tick is only a reference point; the actual dip can move with tape speed.'
+              if kind=='ndr' else
+              'Frequency ticks show standard reference values, not detected signals.'))
     return {'png':_figure_bytes(fig),'caption':caption,'kind':kind,
             'channel':channel,'section_start_s':start_seconds}
 
@@ -416,7 +433,8 @@ def make_evidence_charts(sections, findings, original_rate):
                 supported=False
             target=(50 if '50 Hz' in outcome else 60) if kind=='mains' else (15625 if kind=='tv' and any(w in outcome for w in ('PAL','SECAM')) and 'NTSC' not in outcome else None)
             peak=render_peak_evidence(section['audio'],kind,section['start'],original_rate,
-                                      target=target,mark_peak=supported)
+                                      target=target,mark_peak=supported,
+                                      notch_info=section.get('ndr') if kind=='ndr' else None)
             blob=base64.b64encode(peak['png']).decode('ascii')
             if len(blob)<=400000:
                 charts.setdefault(key,[]).append({'image_base64':blob,'caption':peak['caption'],

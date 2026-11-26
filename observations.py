@@ -103,21 +103,35 @@ def enrich_findings(rows, windows, metadata, intervals):
         'The audio detector searches ±180 Hz of 19,000 and requires signal persistence across half-windows.',
         sampled_sections=count, pilot_hits=len(passed), pilot_possible=len(maybe))
 
-    dips = [w.get('ndr') for w in windows if w.get('ndr')]
+    dips = [w.get('ndr') for w in windows if w.get('ndr') and w['ndr'].get('freq') is not None]
+    detected = [d for d in dips if d.get('supported') or d.get('possible')]
     if dips:
-        strongest = max(dips, key=lambda r:r['depth_db']-r['control95'])
+        strongest = max(detected or dips, key=lambda r:r['depth_db']-r['control95'])
+        centers = [float(d['freq']) for d in detected]
         add('NDR-style 10 kHz dip',
-            f'Measured strongest candidate at {strongest["freq"]:,.1f} Hz: local dip {strongest["depth_db"]:.2f} dB; '
-            f'95th-percentile control dip {strongest["control95"]:.2f} dB; advantage '
-            f'{strongest["depth_db"]-strongest["control95"]:+.2f} dB.',
-            f'Candidate appears in {strongest["occurrence"]*100:.1f}% of {strongest["frames"]} usable frames; '
-            'positive detection needs enough depth, difference from controls and recurring frames.',
-            notch_candidate_hz=round(strongest['freq'], 2),
-            notch_depth_db=round(strongest['depth_db'], 2),
-            notch_occurrence_percent=round(strongest['occurrence']*100, 1),
-            notch_control_db=round(strongest['control95'], 2))
+            f'Strongest candidate {strongest["freq"]:,.1f} Hz: sound level is '
+            f'{strongest["depth_db"]:.2f} dB below the surrounding frequency bands; '
+            f'comparison dips reach {strongest["control95"]:.2f} dB.',
+            f'Dip seen in {strongest["occurrence"]*100:.1f}% of {strongest["frames"]} '
+            f'five-second checks in the strongest section. '
+            f'Neighbourhood tested: approximately {strongest["width_hz"]:.0f} Hz scale; '
+            f'the weaker shoulder still rises by {strongest["bilateral_db"]:.2f} dB.',
+            f'Qualifying dip in {len(detected)}/{count} independent song excerpts; '
+            + (f'centre positions {min(centers):,.0f}–{max(centers):,.0f} Hz.'
+               if centers else 'no excerpt met the repeatability and depth checks.'),
+            notch_candidate_hz=round(strongest['freq'],2),
+            notch_median_hz=round(float(sorted(centers)[len(centers)//2]) if len(centers)%2 else float((sorted(centers)[len(centers)//2-1]+sorted(centers)[len(centers)//2])/2) if centers else strongest['freq'],2),
+            notch_depth_db=round(strongest['depth_db'],2),
+            notch_occurrence_percent=round(strongest['occurrence']*100,1),
+            notch_control_db=round(strongest['control95'],2),
+            notch_width_hz=round(strongest['width_hz'],0),
+            notch_sections=len(detected),
+            notch_tested_sections=count)
     else:
-        add('NDR-style 10 kHz dip', f'0 of {count} excerpts yielded enough usable 9.3–10.7 kHz notch data; original Nyquist {fs/2:,.0f} Hz.')
+        add('NDR-style 10 kHz dip',
+            f'0 of {count} excerpts contained a qualifying two-sided 9.55–10.48 kHz dip. '
+            f'Original maximum measurable frequency: {fs/2:,.0f} Hz.',
+            notch_sections=0, notch_tested_sections=count)
 
     stereo = [w['stereo_corr'] for w in windows if w.get('stereo_corr') is not None]
     if stereo:

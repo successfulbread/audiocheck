@@ -283,49 +283,121 @@ def _spectrum_window(x, original_rate):
     return electrical,broadcast,cutoff
 
 
-def _ndr_notch_window(audio, input_rate):
-    """Search for a persistent narrow spectral *dip* around 10 kHz.
+def _ndr_profile(audio, fs=SAMPLE_RATE):
+    """Spectrum suitable for measuring a broad, stable *loss* near 10 kHz.
 
-    A radio/transcription notch can shift by a few percent after cassette
-    copying. This detector never treats a 10 kHz spectral *peak* as NDR.
+    Median Welch averages musical peaks over time. The very short (6 Hz)
+    smoothing prevents isolated FFT-bin minima from masquerading as notches.
+    """
+    y = np.asarray(audio, dtype=np.float64)
+    if y.ndim == 2:
+        y = y.mean(axis=1)
+    if len(y) < int(fs * 3):
+        return None
+    f, power = signal.welch(y, fs=fs, nperseg=min(16384, len(y)),
+                            noverlap=min(8192, len(y)//2),
+                            window='hann', average='median', scaling='density')
+    band = (f >= 8750) & (f <= 11450)
+    f, power = f[band], power[band]
+    if len(f) < 100:
+        return None
+    # A codec low-pass can leave a numerical noise floor above the cutoff.
+    # Do not interpret gaps in virtually absent high-frequency material.
+    overall = max(float(np.mean(y*y)), 1e-24)
+    activity = float(np.mean(power[(f >= 9500)&(f <= 10500)]))
+    if 10*np.log10(max(activity*1000, 1e-30)/overall) < -75:
+        return None
+    df = float(f[1]-f[0])
+    db = 10*np.log10(np.maximum(power, 1e-28))
+    smooth = ndimage.gaussian_filter1d(db, 6/df)
+    return f, smooth, df
+
+
+def _ndr_depth_curve(f, spectrum, df, width):
+    """Compare a candidate trough with BOTH shoulders beyond its edges.
+
+    22–140 Hz analysis scales allow a sharp electronic notch or the much
+    broader 80–200 Hz depression surviving MP3/cassette transfers. A smooth
+    high-frequency roll-off alone fails the two-sided shoulder requirement.
+    """
+    center = ndimage.uniform_filter1d(
+        spectrum, size=max(3, int(round(.5*width/df)) | 1))
+    wings = ndimage.uniform_filter1d(
+        spectrum, size=max(3, int(round(.65*width/df)) | 1))
+    left = np.interp(f - 1.5*width, f, wings)
+    right = np.interp(f + 1.5*width, f, wings)
+    depth = .5*(left+right) - center
+    bilateral = np.minimum(left-center, right-center)
+    return depth, bilateral, center, left, right
+
+
+def _ndr_notch_window(audio, input_rate):
+    """Find a persistent, two-sided 10 kHz dip despite transferred tape speed.
+
+    The NDR/ARD-era broadcast-filter clue can drift by a few hundred Hz and
+    be wider than one FFT neighbourhood. Check broad shoulders, independent
+    time blocks and non-notch comparison bands, not one lowest frequency bin.
+    This is evidence of a filtered broadcast path, never proof of NDR.
     """
     if input_rate < 22500:
         return None
-    mono=np.mean(audio.astype(np.float64),axis=1)
-    fs=SAMPLE_RATE
-    length=4*fs; frames=[]; freq=None
-    for begin in range(0,len(mono)-length+1,length//2):
-        chunk=mono[begin:begin+length]
-        if np.sqrt(float(np.mean(chunk*chunk)))<.0005:continue
-        f=np.fft.rfftfreq(length,1/fs)
-        p=np.abs(np.fft.rfft(chunk*np.hanning(length)))**2
-        band=(f>=9300)&(f<=10700)
-        hz=f[band]
-        logarithmic=10*np.log10(np.maximum(p[band],1e-20))
-        baseline=ndimage.median_filter(logarithmic,size=321,mode='reflect')
-        contrast=ndimage.uniform_filter1d(baseline-logarithmic,size=41)
-        # Avoid interpreting a global high-frequency cutoff as a narrow notch.
-        region=(hz>=9400)&(hz<=10600)
-        baselevel=float(np.median(logarithmic[region]))
-        if baselevel < -65:continue
-        frames.append(contrast)
-        freq=hz
-    if len(frames)<3 or freq is None:return None
-    values=np.asarray(frames)
-    average=np.median(values,axis=0)
-    search=(freq>=9650)&(freq<=10380)
-    selections=np.where(search)[0]
-    idx=selections[np.argmax(average[search])]
-    hz=float(freq[idx]); depth=float(average[idx])
-    occurrence=float(np.mean(values[:,idx]>=3))
-    controls=average[((freq>=9350)&(freq<=9620)) | ((freq>=10420)&(freq<=10650))]
-    control95=float(np.percentile(controls,95))
-    # Require a localized, repeatable notch stronger than competing nearby dips.
-    supported=(depth>=4.6 and depth-control95>=2.3 and occurrence>=.66)
-    possible=(depth>=3.4 and depth-control95>=1.5 and occurrence>=.60)
-    return {'freq':hz,'depth_db':depth,'occurrence':occurrence,
-            'control95':control95,'frames':len(frames),
-            'supported':supported,'possible':possible}
+    profile = _ndr_profile(audio)
+    if profile is None:
+        return None
+    f, smooth, df = profile
+    search = (f >= 9550)&(f <= 10475)
+    control = ((f >= 8920)&(f <= 9420)) | ((f >= 10650)&(f <= 11060))
+    candidates = []
+    for width in (22., 45., 85., 140.):
+        depth, bilateral, center, left, right = _ndr_depth_curve(f,smooth,df,width)
+        acceptable = search & (bilateral >= .95)
+        if not np.any(acceptable):
+            continue
+        eligible = np.flatnonzero(acceptable)
+        idx = int(eligible[np.argmax(depth[acceptable])])
+        # Comparison dips must also be two-sided, not just falling treble.
+        control_depth = np.maximum(depth[control], 0)
+        control_depth = np.where(bilateral[control] >= .95, control_depth, 0)
+        control95 = float(np.percentile(control_depth,95))
+        candidates.append((float(depth[idx]),int(idx),float(width),
+                           float(bilateral[idx]),control95,
+                           float(center[idx]),float(left[idx]),float(right[idx])))
+    if not candidates:
+        return {'freq':None,'depth_db':0.,'occurrence':0.,
+                'control95':0.,'frames':int(len(audio)//(SAMPLE_RATE*5)),
+                'supported':False,'possible':False,
+                'width_hz':0.,'bilateral_db':0.}
+    depth,idx,width,bilateral,control95,center_db,left_db,right_db = max(candidates,key=lambda x:x[0])
+    center_hz=float(f[idx])
+    # Independently test repeatability in five-second excerpts. Small changes
+    # in cassette speed can move the dip by about +/-60 Hz during a section.
+    y=np.asarray(audio,dtype=np.float64)
+    if y.ndim==2:y=y.mean(axis=1)
+    step=SAMPLE_RATE*5
+    successes=0; frames=0
+    for begin in range(0,len(y)-step+1,step):
+        small=_ndr_profile(y[begin:begin+step])
+        if small is None:continue
+        ff, ss,dd=small
+        local_depth,local_bilateral,_,_,_=_ndr_depth_curve(ff,ss,dd,width)
+        near=(ff >= center_hz-65)&(ff <= center_hz+65)
+        if not np.any(near):continue
+        passes = (local_depth[near]>=1.10)&(local_bilateral[near]>=.55)
+        successes+=int(bool(np.any(passes)))
+        frames+=1
+    occurrence=successes/max(frames,1)
+    advantage=depth-control95
+    supported = bool(depth>=2.55 and bilateral>=1.45 and
+                     advantage>=1.0 and occurrence>=.60 and frames>=2)
+    possible = bool(depth>=1.85 and bilateral>=1.0 and
+                    advantage>=.55 and occurrence>=.55 and frames>=2)
+    return {'freq':round(center_hz,2),'depth_db':round(depth,2),
+            'occurrence':round(occurrence,3),'control95':round(control95,2),
+            'frames':frames,'supported':supported,'possible':possible,
+            'width_hz':width,'bilateral_db':round(bilateral,2),
+            'center_db':round(center_db,2),
+            'left_shoulder_db':round(left_db,2),
+            'right_shoulder_db':round(right_db,2)}
 
 def _click_candidates(x, fs):
     """Impulsive outliers from a short linear-prediction residual.
@@ -778,17 +850,25 @@ def _consolidate_ndr(windows):
         available=any(r for r in entries)
         return verdict('No NDR-style notch found' if available else 'Not measurable',
             'Not detected' if available else 'Not measurable',
-            'No consistently narrow dip close to 10 kHz was supported in the sampled audio.'
-            if available else 'Too little audible high-frequency material was available to test the 10 kHz dip.')
-    selected=strong if strong else possible
+            'No repeatable dip with higher sound levels on BOTH sides was found near 10 kHz.'
+            if available else 'There was not enough high-frequency sound to check for a 10 kHz notch.')
+    selected=possible  # Include both strong and tentative sections in overall centre.
+    centers=np.array([r['freq'] for r in selected],dtype=float)
+    depths=np.array([r['depth_db'] for r in selected],dtype=float)
+    average_center=float(np.median(centers))
     best=max(selected,key=lambda v:v['depth_db'])
+    section_count=len(selected)
+    spread=float(np.ptp(centers)) if len(centers)>1 else 0.0
+    strength=(f'{len(strong)} clear, {len(possible)-len(strong)} tentative')
     return verdict('Possible NDR-style 10 kHz dip',
         'Possible' if strong else 'Tentative',
-        f'A narrow dip centered near {best["freq"]:.0f} Hz is approximately '
-        f'{best["depth_db"]:.1f} dB below neighbouring audio and appears in '
-        f'{best["occurrence"]:.0%} of examined frames. Similar dips occurred on '
-        'some 1980s NDR broadcasts; other audio filters can produce them too. '
-        'Not proof this recording aired on NDR.')
+        f'A recurring dip is centred near {average_center:,.0f} Hz '
+        f'(about {float(np.median(depths)):.1f} dB quieter than nearby frequencies). '
+        f'Found in {section_count} of {len(entries)} sampled sections ({strength}); '
+        f'the measured centres vary by {spread:.0f} Hz. '
+        f'The clearest section drops {best["depth_db"]:.1f} dB. '
+        'This resembles a filter used on some historical German radio broadcasts, '
+        'but is not proof of an NDR station or a particular tape speed.')
 
 def _stereo_format(windows, channels):
     if channels == 1:
