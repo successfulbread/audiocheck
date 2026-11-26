@@ -1,4 +1,4 @@
-"""AudioCheQ v2.1: source, metadata, RDS, pitch and transport clues.
+"""AudioCheQ v2.4: traceable notch detection and channel evidence.
 
 Measures evidence, not proof of an original recording medium or location.
 Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
@@ -21,6 +21,9 @@ from rds_inspector import inspect_rds
 from observations import enrich_findings
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
+
+ANALYZER_VERSION = "2.4.0"
+NOTCH_DETECTOR_VERSION = "2.4-broad-shoulder"
 
 MAX_SECONDS = 300.0
 MIN_SECONDS = 4.0
@@ -843,32 +846,57 @@ def _consolidate_wow(windows):
     return info
 
 def _consolidate_ndr(windows):
-    entries=[w.get('ndr') for w in windows]
-    strong=[r for r in entries if r and r['supported']]
-    possible=[r for r in entries if r and r['possible']]
+    """Clearly distinguish an observed spectral notch from attribution to NDR.
+
+    An NDR-style notch is a *frequency response* finding, not proof that NDR
+    broadcast the song. Strong repeatability may justify strong confidence in
+    the measured notch while its historical provenance remains unverified.
+    """
+    entries = [w.get('ndr') for w in windows]
+    available = [r for r in entries if r and r.get('freq') is not None]
+    strong = [r for r in available if r.get('supported')]
+    possible = [r for r in available if r.get('possible')]
     if not strong and not possible:
-        available=any(r for r in entries)
-        return verdict('No NDR-style notch found' if available else 'Not measurable',
-            'Not detected' if available else 'Not measurable',
-            'No repeatable dip with higher sound levels on BOTH sides was found near 10 kHz.'
-            if available else 'There was not enough high-frequency sound to check for a 10 kHz notch.')
-    selected=possible  # Include both strong and tentative sections in overall centre.
-    centers=np.array([r['freq'] for r in selected],dtype=float)
-    depths=np.array([r['depth_db'] for r in selected],dtype=float)
-    average_center=float(np.median(centers))
-    best=max(selected,key=lambda v:v['depth_db'])
-    section_count=len(selected)
-    spread=float(np.ptp(centers)) if len(centers)>1 else 0.0
-    strength=(f'{len(strong)} clear, {len(possible)-len(strong)} tentative')
-    return verdict('Possible NDR-style 10 kHz dip',
-        'Possible' if strong else 'Tentative',
-        f'A recurring dip is centred near {average_center:,.0f} Hz '
-        f'(about {float(np.median(depths)):.1f} dB quieter than nearby frequencies). '
-        f'Found in {section_count} of {len(entries)} sampled sections ({strength}); '
-        f'the measured centres vary by {spread:.0f} Hz. '
-        f'The clearest section drops {best["depth_db"]:.1f} dB. '
-        'This resembles a filter used on some historical German radio broadcasts, '
-        'but is not proof of an NDR station or a particular tape speed.')
+        best = max(available, key=lambda r: r.get('depth_db', 0.), default=None)
+        if best:
+            return {
+                'result': 'No confirmed NDR-style 10 kHz dip',
+                'certainty': 'Not detected',
+                'detail': (f'The strongest candidate around {best["freq"]:,.0f} Hz '
+                           f'was {best["depth_db"]:.2f} dB deep, but did not meet '
+                           'the required two-sided depth and/or persistence tests. '
+                           'A smooth high-frequency roll-off is not a notch.'),
+                'metrics': {'notch_candidate_hz': best['freq'],
+                            'notch_depth_db': best['depth_db'],
+                            'notch_sections': 0,
+                            'notch_tested_sections': len(entries)},
+            }
+        return verdict('10 kHz region unavailable', 'Not measurable',
+            'The file lacks enough upper-frequency content for a meaningful two-sided notch measurement.')
+
+    centers = np.array([r['freq'] for r in possible], dtype=float)
+    depths = np.array([r['depth_db'] for r in possible], dtype=float)
+    median_center = float(np.median(centers))
+    best = max(possible, key=lambda r: r['depth_db'])
+    spread = float(np.ptp(centers)) if len(centers) > 1 else 0.0
+    confirmed = len(strong) >= 2 and len(possible) >= 2
+    certainty = 'High' if confirmed else 'Possible' if strong else 'Tentative'
+    return {
+        'result': 'NDR-style 10 kHz dip detected',
+        'certainty': certainty,
+        'detail': (f'A repeated dip near {median_center:,.0f} Hz measures '
+                   f'{float(np.median(depths)):.2f} dB below nearby frequencies '
+                   f'(strongest: {best["depth_db"]:.2f} dB). '
+                   f'Detected in {len(possible)} of {len(entries)} sampled sections '
+                   f'({len(strong)} high-strength). The measured centres vary '
+                   f'by {spread:.0f} Hz. This is an observable filter notch, not '
+                   'proof the recording was broadcast on NDR.'),
+        'metrics': {'notch_median_hz': round(median_center, 2),
+                    'notch_depth_db': round(float(best['depth_db']), 2),
+                    'notch_sections': len(possible),
+                    'notch_tested_sections': len(entries),
+                    'notch_occurrence_percent': round(float(best['occurrence'])*100, 1)},
+    }
 
 def _stereo_format(windows, channels):
     if channels == 1:
@@ -1070,7 +1098,7 @@ def _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, meta, s
             'A narrow 19 kHz pilot tone fits a stereo FM broadcast.')
     if any(k in br for k in ('NTSC', 'PAL', 'SECAM')):
         facts.append('A TV scanning tone was found. It may be from recording or later copying, not necessarily radio.')
-    if ndr.get('certainty') in ('Possible', 'Tentative'):
+    if ndr.get('certainty') in ('High', 'Strong', 'Possible', 'Tentative'):
         add('FM radio', 0.6,
             'A dip near 10 kHz resembles an old NDR radio-transfer clue, but is not unique to radio.')
 
@@ -1271,6 +1299,15 @@ def analyze_path(path, file_name=None, *, charts=False):
         from spectrograms import make_evidence_charts
         metadata["spectrograms"] = make_evidence_charts(plot_sections, rows, metadata["input_rate"])
         plot_sections.clear()  # Do not preserve decoded audio beyond this call.
+    metadata["analyzer_version"] = ANALYZER_VERSION
+    metadata["notch_detector_version"] = NOTCH_DETECTOR_VERSION
+    metadata["ndr_screening"] = [
+        {"start_seconds": round(start, 1),
+         "centre_hz": (measure or {}).get("freq"),
+         "depth_db": (measure or {}).get("depth_db"),
+         "qualifying": bool(measure and measure.get("possible"))}
+        for (start, _), measure in zip(analyzed_intervals, (w.get("ndr") for w in analyzed))
+    ]
     metadata["analyzed_seconds"] = round(analyzed_seconds, 1)
     metadata["sampled_intervals"] = [{"start_seconds": round(a, 2), "duration_seconds": round(b, 2)} for a,b in analyzed_intervals]
     metadata["file_size_bytes"] = path.stat().st_size
