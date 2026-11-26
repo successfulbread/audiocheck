@@ -1,4 +1,4 @@
-"""AudioCheQ v2.4.1 - graceful startup and explicit analyzer version checks."""
+"""AudioCheQ v2.4.2 - graceful startup and explicit analyzer version checks."""
 from __future__ import annotations
 
 import html
@@ -8,28 +8,43 @@ import tempfile
 
 import streamlit as st
 
-APP_VERSION = "2.4.1"
-st.set_page_config(page_title="AudioCheQ v2.4.1 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
+APP_VERSION = "2.4.2"
+st.set_page_config(page_title="AudioCheQ v2.4.2 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
 
-# Import the module before taking individual names from it. This makes a partial
-# GitHub deployment an actionable in-app message, not a redacted ImportError.
+# Load this release's uniquely named engine from the SAME directory as app.py.
+# This avoids a stale analyzer.py left in GitHub or an unrelated `analyzer`
+# module elsewhere on the Python import path. There is no fallback to an old
+# analyzer, because it would silently undo the fixed NDR detection.
+import importlib.util
+ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v242.py")
+if not ENGINE_PATH.is_file():
+    st.error("AudioCheQ v2.4.2 is missing its audio engine file.")
+    st.write("Missing: **audiocheq_engine_v242.py** beside **app.py**.")
+    st.info("Upload both files from the v2.4.2 two-file update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
+    st.stop()
 try:
-    import analyzer as _engine
+    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v242", ENGINE_PATH)
+    if not _spec or not _spec.loader:
+        raise ImportError("Cannot load engine from the local Python file")
+    _engine = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_engine)
 except Exception as exc:
-    st.error("AudioCheQ could not load the audio analyzer. The deployed files or dependencies may be incomplete.")
+    st.error("AudioCheQ could not load its v2.4.2 audio engine.")
     st.code(f"{type(exc).__name__}: {exc}", language="text")
-    st.info("Upload every file from the complete v2.4.1 ZIP to the root of the GitHub repository, then reboot the Streamlit app.")
+    st.write(f"Engine file: `{ENGINE_PATH.name}`")
+    st.info("Check that the complete ZIP contents are in the repository root and that Streamlit has finished installing packages.txt and requirements.txt.")
     st.stop()
 
 _analyzer_loaded = getattr(_engine, "ANALYZER_VERSION", "missing")
 _required_exports = ("MAX_BYTES", "analyze", "analyze_path", "ANALYZER_VERSION")
 _missing_exports = [name for name in _required_exports if not hasattr(_engine, name)]
 if _analyzer_loaded != APP_VERSION or _missing_exports:
-    st.error("AudioCheQ detected a mismatch between the website and its audio analyzer.")
-    st.write(f"Website version: **{APP_VERSION}**; analyzer version: **{_analyzer_loaded}**.")
+    st.error("The website and its dedicated audio engine have different versions.")
+    st.write(f"Website: **{APP_VERSION}**; engine: **{_analyzer_loaded}**.")
     if _missing_exports:
-        st.write("Missing analyzer fields: " + ", ".join(_missing_exports))
-    st.info("Replace both app.py and analyzer.py with the matching files from the complete v2.4.1 ZIP. Commit to the deployed GitHub branch and reboot the app.")
+        st.write("Missing engine fields: " + ", ".join(_missing_exports))
+    st.write(f"Loaded engine file: `{ENGINE_PATH.name}`")
+    st.info("Replace app.py and audiocheq_engine_v242.py together from the v2.4.2 update ZIP, then reboot the app.")
     st.stop()
 
 MAX_BYTES = _engine.MAX_BYTES
@@ -187,7 +202,7 @@ st.markdown('''<div class="ac-hero">
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
 <p class="ac-tagline">Find the story hidden in the sound.</p>
-<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.4.1 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.4.2 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -704,7 +719,7 @@ if report:
     report_version = str(meta.get("analyzer_version") or "unknown / earlier version")
     st.markdown(f'<div class="ac-analysis-build">Analyzed with engine: {html.escape(report_version)} · Current engine: {html.escape(ANALYZER_VERSION)}</div>', unsafe_allow_html=True)
     if report_version != ANALYZER_VERSION:
-        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.4.1 deployment completes.')
+        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.4.2 deployment completes.')
     results = sorted_findings(report.get("rows", []))
     plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(
