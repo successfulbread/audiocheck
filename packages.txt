@@ -1,1 +1,8 @@
 ffmpeg
+git
+build-essential
+meson
+ninja-build
+libsndfile1-dev
+libliquid-dev
+nlohmann-json3-dev

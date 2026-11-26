@@ -1,37 +1,59 @@
-# AudioCheQ v2.0 — Signal Forensics
+# AudioCheQ v2.1 — Embedded Metadata, RDS and Measured Evidence
 
-Five-minute Streamlit audio-forensics application (MP3/MPEG, WAV, FLAC, M4A, OGG; 100 MB maximum), designed for lostwave provenance work. The existing dark theme, native two-step upload, Archive.org direct-audio input, 50/60 Hz screening, TV scan lines, NDR dip, vinyl noise/clicks, file history and origin guess are retained.
+Audio forensics / lostwave app for Streamlit. Supports MP3/MPEG, WAV, FLAC, M4A and OGG files up to 5 minutes / 100 MB, plus direct audio-file URLs from the Internet Archive. Retains the existing dark theme, native uploader, broadcast/NTSC/FM-pilot analysis, 50/60 Hz hum, 10 kHz dip, vinyl/cassette evidence, pitch/speed/wow/flutter, phase and peak-based graphs.
 
-## New in v2.0
+## New in v2.1
 
-- **Dedicated 19 kHz FM stereo pilot check**: separate result card with observed frequency (Hz), offset from nominal 19,000 Hz, peak-to-local-band signal strength (dB), persistence in two halves of each excerpt and per-file section counts. A wide search allows moderate pitch deviations, with stricter local-prominence screening than the general TV detector.
-- **Stereo phase / channel delay**: zero-lag Pearson correlation, strongest +/-4 ms cross-correlation, approximate lag in ms, L/R level difference, side/mid ratio and separate bass/mid/high correlation. Identifies polarity reversal, near-mono and possible delayed channel copies; does not prove tape azimuth.
-- **Playback-speed *reference* estimate**: measures the observed/nominal ratio of a confirmed FM pilot, TV scanning frequency or multiple coherent mains harmonics; returns percentage and reverse mathematical correction. Rejects conflicting reference families. Never claims a speed error from tone that could have entered after transfer.
-- **Musical tuning estimate**: votes from STFT spectral peaks across multiple pitched frames and note bins, expressed as cents relative to A440. Reports a hypothetical uniform speed correction as *unverified*; deliberate tuning, temperament and instrument harmonics can explain the same displacement.
-- **Wow / flutter**: tracks instantaneous pitch of a spectrally confirmed stationary reference using complex demodulation and a phase derivative; shows RMS cents variation and the largest modulation-frequency peak, then labels possible periodic wow (~0.3–6 Hz), flutter (~6–30 Hz), drift or no clear wobble. No reference = not measurable, rather than false diagnosis from musical vibrato.
-- **Peak-based evidence graphs**: measured Welch power spectrum profiles for 50/60 Hz hum, TV scanning, FM pilot and 10 kHz notch; frequency markers are on the horizontal axis (never drawn across peaks). Stereo delay correlation, tuning vote histograms and time-domain pitch drift graphs accompany findings where enough signal exists. The legacy `render_evidence()` spectrogram API remains for compatibility; normal displayed charts use the new peak plots.
-- **Expanded Why?** sections: actual measured values, methods, threshold rationale, competing explanations, conditional assumptions and limitations. Uncertain findings are retained rather than forced into a detection.
+- **Embedded track / technical metadata card:** Reads textual tags actually saved in the file, via FFprobe and Mutagen. This includes ID3 (title, artist, album, year, encoder, encoding/tag dates, comments, website/source URLs, custom TXXX, selected unique IDs/ratings), MP4 tags, FLAC/Vorbis comments and readable WAV/RIFF tags where recognized. Duplicated identical fields are consolidated. Artwork/binary image payloads are never rendered. The card lists the first 14 found fields and reports the total; **File details & all embedded tags** displays up to 90 readable fields in a table. Oversized values are visibly truncated. No name is guessed from the filename or matched against outside catalogues.
+- **RDS / RadioText card:** Explicitly distinguishes (a) **RDS-like text stored as file metadata** from (b) **actual on-air RDS digital data**. A normal 44.1/48 kHz file physically cannot preserve the 57 kHz FM multiplex subcarrier; a 19 kHz FM pilot does not imply any recoverable RDS. For mono, lossless **WAV or FLAC at >=128 kHz**, AudioCheQ checks the 19 kHz pilot and relative energy in the **57 kHz ±1.5 kHz** band. An apparent signal is reported as a *candidate only*. If the optional `redsea` command-line decoder is installed, AudioCheQ passes a bounded MPX excerpt to redsea and returns PI / PS (station) / RadioText / RT+ song and artist fields **only if the decoder emits repeated, consistent PI-coded RDS groups**. No decoded data is invented or inferred from spectral energy.
+- **Data-rich Why? sections:** Every one of the 14 visible finding cards now leads with **Measured in this file**: actual excerpt times, sample rate/Nyquist, accepted/not-accepted harmonic and tone peaks, RMS click timing, spectral notch depth versus controls, bandwidth limits, dropouts, stereo correlation, phase, reference-tone tracking and other detector data applicable to that finding. Numerical metrics precede a separate **Interpretation & limits** explanation. Where a detector failed, it reports the tested windows, thresholds and/or actual candidate data rather than fabricating a frequency.
+- **File details:** Container, sample representation, stored bit depth where reported, bitrate, channels, byte count, analyzed duration and a scrollable table of embedded tags. Read-only. User-supplied text is escaped in generated HTML cards.
 
-## Update the existing Streamlit website
+## Updating Streamlit Cloud / GitHub
 
-The app entry point is still `app.py`. Replace these files in the existing GitHub repository and commit to `main`:
+Upload the complete ZIP into the existing repository or replace/add just these files:
 
-1. `app.py`
-2. `analyzer.py`
-3. `spectrograms.py`
-4. **New:** `forensics.py`
+- **Updated:** `app.py`, `analyzer.py`
+- **New:** `metadata_inspector.py`, `rds_inspector.py`, `observations.py`
 
-No new requirements or external music-matching services. For a clean installation, upload all files in this ZIP, including `.streamlit/config.toml`, `requirements.txt`, `packages.txt`, `archive_source.py`, `file_history.py` and `tests/`. Streamlit Cloud must have FFmpeg via `packages.txt`.
+The existing `forensics.py`, `spectrograms.py`, `file_history.py`, `archive_source.py`, `.streamlit/config.toml`, `requirements.txt` and `packages.txt` are unchanged and included for a full, compatible replacement. Keep `packages.txt` with `ffmpeg`.
 
-The main pipeline still examines up to four 25-second windows across a recording. Plot audio excerpts are disposed of after rendering, and only the derived summary and base64 plot images remain in the Streamlit session. No audio recording is sent to Shazam, fingerprinting databases or outside recognition services.
+No new Python dependencies and no external music-identification/search API. The app examines bounded parts of the file and retains only derived results and chart PNGs, not raw decoded audio in session state.
 
-## Critical limitations
+### Optional redsea decoder for raw FM multiplex only
 
-- A nominal 19 kHz pilot (or its absence) is **not proof** of FM origin; many receivers remove it. A lone unrelated high-frequency tone can sometimes mimic it. AudioCheQ operates on decoded 44.1 kHz stereo, so it **cannot test the 38 kHz FM multiplex subcarrier**.
-- A measured frequency offset is a *conditional* playback-speed estimate, not evidence that the artist performed at another pitch. The tone could have been added later; a broadcast tone's frequency does not necessarily track the original song's transport speed.
-- A440 musical tuning estimates are tentative, particularly for recordings with vibrato, unusual tuning, many harmonics or limited pitched content. Never use the hypothetical correction as a measured fact.
-- Wow/flutter needs a confirmed, trackable tonal reference; it does not identify turntable speed or cassette speed from music alone. Frequency modulation from a real oscillator or mains can mimic mechanical wobble.
-- Channel polarity and delay are properties of the *present copy*. They do not prove whether a tape machine, microphone, codec, remix or stereo effect caused the difference.
-- The visualization's highest spectral bin is a measurement only; a source-specific detection requires the separate screening thresholds and temporal evidence. Encoder metadata and source clues cannot establish a lost song's identity.
+RDS can be decoded from the original **raw demodulated FM multiplex (MPX)** signal, *not* normal FM audio output. If you need actual bit-level RDS decoding on a machine with a compatible capture, install [windytan/redsea](https://github.com/windytan/redsea) and ensure the `redsea` executable is on the application's PATH. Redsea is **not bundled**, is **not installed by `requirements.txt` or `packages.txt`**, and is not assumed present on Streamlit Cloud. The app reports **decoder unavailable** if an eligible MPX candidate is found but redsea is absent. A decoder returning no consistent groups is a negative result; spectral peaks alone do not establish transmitted station or song details. RDS Station/RadioText fields already stored in *ordinary file tags* are displayed without redsea, clearly labelled as stored metadata.
 
-See `VALIDATION.md` and `tests/test_v20_forensics.py` for reproducible verification.
+## Scientific interpretation
+
+- Metadata is mutable. A title, artist, date or broadcast-station URL stored in a file is evidence about that *file* and its history, not verification that the source recording is authentic.
+- 57 kHz is above the Nyquist limit of normal 44.1/48 kHz audio and is normally removed by FM receivers. Only a high-rate, suitable **raw MPX** capture can be used for on-air RDS decoding. 192 kHz music audio is not automatically a multiplex capture.
+- Reference-tone speed estimates are conditional on the reference pre-dating the speed change. A440 tuning bias is a weak indication, not a proven playback-speed correction.
+- A candidate 10 kHz notch, 19 kHz line, 50/60 Hz hum or 33⅓/45 RPM click train can have unrelated sources. No result establishes the artist's identity without further evidence.
+
+See `VALIDATION.md` and the included unit tests for measured behaviour and limitations.
+
+
+## Optional automatic redsea RDS decoder (v2.2 deployment update)
+
+The updated `packages.txt` installs redsea **build prerequisites** on Streamlit
+Community Cloud (it does not claim that redsea itself is an apt package).
+On the first upload of a *suitable raw high-rate mono FM multiplex WAV/FLAC*
+with measurable energy around 57 kHz, `rds_inspector.py` invokes
+`redsea_bootstrap.py`. The helper checks whether redsea is already installed,
+then compiles the pinned official `windytan/redsea` v1.3.1 from source into `/tmp`
+if necessary. Later uploads reuse the compiled binary for that server instance.
+The first such upload may take substantially longer while the binary builds.
+If the build fails (no network, missing apt packages, constrained RAM), the
+application remains functional and reports why RDS decoding is unavailable.
+For ordinary music files or stored metadata, no build is triggered.
+Set `AUDIOCHEQ_REDSEA_AUTOBUILD=0` to disable optional compilation.
+
+To deploy, replace `packages.txt` and `rds_inspector.py` in GitHub and add
+`redsea_bootstrap.py`. Streamlit Community Cloud reinstalls apt dependencies
+when `packages.txt` changes. No changes to requirements.txt or app.py needed.
+
+**Important:** Decoder installation does not recreate RDS data absent from
+the source. RDS decoding requires a genuine FM multiplex signal, not normal
+44.1/48 kHz music audio (even lossless FLAC). First-run compilation and on-air
+RDS extraction have not been tested on the live Streamlit instance.

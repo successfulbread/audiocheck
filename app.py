@@ -1,4 +1,4 @@
-"""AudioCheQ v2.0 - spectral peaks, FM pilots, phase, speed and wobble."""
+"""AudioCheQ v2.1 - forensic peaks, detailed observations, embedded tags and RDS."""
 from __future__ import annotations
 
 import html
@@ -63,6 +63,14 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-metric strong {color:#172D4B;font-size:.84rem;}
 .ac-card.none .ac-metrics {background:#3B465C;}
 .ac-card.none .ac-metric,.ac-card.none .ac-metric strong {color:#E1E8F2;}
+.ac-observation-title {font-weight:850;color:#0A5E7C;font-size:.85rem;margin:7px 0 8px;}
+.ac-interpret-label {font-size:.80rem;color:#496582;font-weight:820;margin-top:13px;}
+.ac-observations {background:#FFFFFF8A;border:1px solid #C7D4E2;border-radius:11px;
+ padding:10px 12px 10px 30px !important;margin:8px 0 13px !important;}
+.ac-observations li {font-size:.82rem !important;margin:5px 0 !important;line-height:1.48 !important;}
+.ac-card.none .ac-observation-title {color:#78E4E0;}
+.ac-card.none .ac-interpret-label{color:#ADC4E6;}
+.ac-card.none .ac-observations{background:#36435B;border-color:#59657A;}
 .ac-evidence-intro {margin-top:14px;margin-bottom:8px;color:#254C75;font-weight:850;font-size:.85rem;}
 .ac-card.none .ac-evidence-intro {color:#D8E3F6;}
 .ac-evidence {margin:10px 0 15px;padding:9px;background:#FFFFFF;border:1px solid #AFC5DD;border-radius:13px;}
@@ -167,6 +175,8 @@ LABELS = {
     "Wow and flutter": ("Wow / flutter", "&#8767;"),
     "Pitch / musical tuning": ("Musical pitch / tuning", "&#9839;"),
     "Digital file history": ("Digital file age", "&#128197;"),
+    "Embedded metadata": ("Embedded track metadata", "&#128209;"),
+    "RDS / RadioText": ("RDS / station text", "&#128225;"),
     "Playback speed": ("Playback speed", "&#8635;"),
 }
 
@@ -197,6 +207,8 @@ def display_result(key, item):
         if key == "Playback speed":
             return "Unknown"
         if key == "Digital file history":
+            return raw
+        if key in ("Embedded metadata", "RDS / RadioText"):
             return raw
         return "Unclear"
     if key == "Likely audio source":
@@ -245,6 +257,8 @@ def why(key, item):
             "NDR-style 10 kHz dip": "No narrow, persistent reduction of energy around 10 kHz was established.",
             "Stereo format": "The channels could not be distinguished reliably.",
             "Digital file history": "No trustworthy encoder version or encoding-date tag was identified.",
+            "Embedded metadata": "No readable embedded track tags were present.",
+            "RDS / RadioText": "No recoverable on-air RDS data or explicitly tagged RadioText was found.",
             "Playback speed": "Overall speed needs a known reference tone or comparison recording.",
             "FM stereo pilot": "No stable 19,000 Hz FM stereo pilot was resolved above adjacent noise.",
             "Wow and flutter": "No sufficiently steady reference tone was available to measure periodic speed variation.",
@@ -325,6 +339,8 @@ def why(key, item):
         return (detail or "Channel structure was measured.") + (
             " The decoded left and right signals are compared; near-identical channels can indicate dual mono."
             " This describes the file, not necessarily the original master.")
+    if key in ("Embedded metadata", "RDS / RadioText"):
+        return detail
     if key == "Digital file history":
         return (detail or "Available encoder metadata was inspected.") + (
             " Encoder versions can establish an earliest plausible encoding year."
@@ -378,7 +394,7 @@ def card(label, item, key=None, evidence_plots=None):
     value = display_result(key, item)
     description = why(key, item)
     sub = ""
-    details_html = f'<p>{html.escape(description)}</p>'
+    details_html = f'<div class="ac-interpret-label">Interpretation &amp; limits</div><p>{html.escape(description)}</p>'
     if key == "Likely audio source":
         pct = item.get("guess_percent")
         if meaningful(item) and isinstance(pct, (int, float)) and 0 < pct < 100:
@@ -395,7 +411,7 @@ def card(label, item, key=None, evidence_plots=None):
                 facts.append("Frequency range: " + summary + (". " + reason if reason else ""))
         # Short factual list. An uncertain source still gets the frequency facts.
         if facts:
-            details_html = (f'<p>{html.escape(description)}</p>' +
+            details_html = (f'<div class="ac-interpret-label">Interpretation &amp; limits</div><p>{html.escape(description)}</p>' +
                             '<ul>' + ''.join(f'<li>{html.escape(f)}</li>' for f in facts[:10]) + '</ul>')
     elif key == "Digital file history":
         facts = item.get("facts", {}) if isinstance(item.get("facts"), dict) else {}
@@ -434,6 +450,27 @@ def card(label, item, key=None, evidence_plots=None):
         'modulation_amplitude_cents':'Modulation peak (cents)',
         'tone_hz':'Tracked tone (Hz)',
         'nominal_hz':'Reference frequency (Hz)',
+        'embedded_fields':'Readable tag fields','tag_sources':'Tag parser sources',
+        'rds_tag_fields':'RDS-named tag fields','artwork_items':'Artwork attachments',
+        'tagged_rds_fields':'RDS-named tag fields','rds_groups':'Validated RDS groups',
+        'rds_band_contrast_db':'57 kHz band vs controls (dB)',
+        'pilot_prominence_db':'19 kHz pilot prominence (dB)',
+        'input_sample_rate_hz':'File sample rate (Hz)', 'nyquist_hz':'File Nyquist (Hz)',
+        'analyzed_seconds':'Audio examined (s)','possible_interruptions':'Level interruptions',
+        'bandwidth_min_khz':'Minimum sampled extent (kHz)',
+        'bandwidth_max_khz':'Maximum sampled extent (kHz)',
+        'notch_candidate_hz':'Candidate notch (Hz)',
+        'notch_depth_db':'Notch depth (dB)',
+        'notch_control_db':'Control notch depth (dB)',
+        'notch_occurrence_percent':'Notch persistence (%)',
+        'pilot_hits':'Strong pilot excerpts','pilot_possible':'Weak pilot excerpts',
+        'matched_sections':'Rotation-match excerpts','click_events':'Matched click events',
+        'fitted_rotation_period_s':'Fitted revolution (s)',
+        'click_fit_error_ms':'Click-grid RMS error (ms)',
+        'stereo_median_corr':'Median stereo correlation',
+        'stereo_min_corr':'Minimum stereo correlation',
+        'stereo_max_corr':'Maximum stereo correlation',
+        'reference_families':'Qualified reference families',
     }
     scalar_lines=[]
     for metric,title in metric_labels.items():
@@ -442,7 +479,15 @@ def card(label, item, key=None, evidence_plots=None):
             scalar_lines.append('<div class="ac-metric"><span>'+html.escape(title)+'</span>'+
                                 '<strong>'+html.escape(str(metric_value))+'</strong></div>')
     if scalar_lines:
-        details_html += '<div class="ac-metrics">'+''.join(scalar_lines)+'</div>'
+        details_html = '<div class="ac-metrics">'+''.join(scalar_lines)+'</div>' + details_html
+    observations = item.get('observations', [])
+    if isinstance(observations, list) and observations:
+        notes = [str(x)[:500] for x in observations if x]
+        # Actual measurements first. Method discussion stays below.
+        details_html = ('<div class="ac-observation-title">Measured in this file</div>'
+                        '<ul class="ac-observations">' +
+                        ''.join(f'<li>{html.escape(note)}</li>' for note in notes[:22]) +
+                        '</ul>' + details_html)
     if evidence_plots:
         details_html += '<div class="ac-evidence-intro">Measured audio evidence · peak plots</div>'
         for entry in evidence_plots[:2]:
@@ -583,12 +628,33 @@ if report:
     st.markdown('<div class="ac-grid">' + "".join(
         card(LABELS[key][0], item, key, evidence_plots=plots.get(key, []))
         for key, item in results) + '</div>', unsafe_allow_html=True)
-    with st.expander("File details"):
+    with st.expander("File details & all embedded tags"):
         info = meta.get("file_history", {}).get("facts", {})
         bits = info.get("bitrate_kbps")
         rate_text = f" · {bits} kbps" if bits else ""
         st.caption(f'Codec: {meta.get("codec", "unknown")}{rate_text} · '
                    f'Sample rate: {meta.get("input_rate", "?")} Hz · '
-                   f'Channels: {meta.get("channels", "?")}')
+                   f'Channels: {meta.get("channels", "?")} · '
+                   f'Container: {meta.get("container", "unknown")} · '
+                   f'Sample type: {meta.get("sample_fmt") or "unknown"} · '
+                   f'Stored bit depth: {meta.get("bits_per_sample") or "unknown"} · '
+                   f'Size: {meta.get("file_size_bytes", 0):,} bytes · '
+                   f'Analyzed: {meta.get("analyzed_seconds", 0):.1f} s')
+        tags = meta.get('embedded_metadata') or {}
+        entries = tags.get('tags', []) if isinstance(tags, dict) else []
+        st.markdown(f'**Embedded fields:** {len(entries)} (artwork is not displayed).'
+                 ' These are editable file tags, not authenticated song identifications.')
+        if entries:
+            st.dataframe(entries, hide_index=True, use_container_width=True)
+        else:
+            st.caption('No readable track / station / encoder text fields were found in this file.')
+        rds = meta.get('rds') or {}
+        found_rds = rds.get('decoded') or {}
+        if found_rds:
+            st.markdown('**Decoded over-the-air RDS**')
+            st.dataframe([{'field': k, 'value': v} for k, v in found_rds.items()],
+                         hide_index=True, use_container_width=True)
+        else:
+            st.caption('No on-air RadioText, station name or RT+ artist/title was decoded.')
     st.markdown('<div class="ac-foot">Fun clues, not proof. Noise can come from a later recording or copy.</div>',
                 unsafe_allow_html=True)

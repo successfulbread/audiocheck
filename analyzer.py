@@ -1,4 +1,4 @@
-"""AudioCheQ v2.0: source, signal-chain, pitch and transport clues.
+"""AudioCheQ v2.1: source, metadata, RDS, pitch and transport clues.
 
 Measures evidence, not proof of an original recording medium or location.
 Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
@@ -16,6 +16,9 @@ import tempfile
 import numpy as np
 from scipy import ndimage, signal
 from file_history import inspect_file
+from metadata_inspector import inspect_metadata
+from rds_inspector import inspect_rds
+from observations import enrich_findings
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
 
@@ -44,7 +47,7 @@ def _command(args, timeout=40):
 def _probe(path):
     p = _command([
         "ffprobe", "-v", "error", "-select_streams", "a:0",
-        "-show_entries", "stream=codec_name,sample_rate,channels,duration,bit_rate:format=duration,format_name,bit_rate:stream_tags:format_tags",
+        "-show_entries", "stream=codec_name,sample_rate,channels,duration,bit_rate,sample_fmt,bits_per_sample,bits_per_raw_sample:format=duration,format_name,bit_rate:stream_tags:format_tags",
         "-of", "json", str(path)
     ])
     try:
@@ -64,6 +67,9 @@ def _probe(path):
     return {"duration": duration, "input_rate": fs, "channels": channels,
             "codec": stream.get("codec_name", "unknown"),
             "bit_rate": stream.get("bit_rate") or data.get("format", {}).get("bit_rate"),
+            "container": data.get("format", {}).get("format_name", "unknown"),
+            "sample_fmt": stream.get("sample_fmt"),
+            "bits_per_sample": stream.get("bits_per_raw_sample") or stream.get("bits_per_sample"),
             "stream_tags": stream.get("tags") or {},
             "format_tags": data.get("format", {}).get("tags") or {}}
 
@@ -1088,9 +1094,12 @@ def analyze_path(path, file_name=None, *, charts=False):
         raise ValueError("Maximum file size is 100 MB.")
     metadata = _probe(path)
     metadata["file_history"] = inspect_file(path, metadata)
+    metadata["embedded_metadata"] = inspect_metadata(path, metadata)
+    metadata["rds"] = inspect_rds(path, metadata, metadata["embedded_metadata"])
     analyzed = []
     plot_sections = [] if charts else None
     analyzed_seconds = 0.0
+    analyzed_intervals = []
     for start, seconds in _windows(metadata["duration"]):
         audio = _decode_window(path, start, seconds)
         if np.sqrt(float(np.mean(audio * audio))) < 1e-6:
@@ -1132,6 +1141,7 @@ def analyze_path(path, file_name=None, *, charts=False):
                 "phase":phase, "tuning":tuning, "wow":wobble,
             })
         analyzed_seconds += len(audio)/SAMPLE_RATE
+        analyzed_intervals.append((start, len(audio)/SAMPLE_RATE))
         del audio # Avoid keeping 100+ MB of decoded audio in RAM.
     if not analyzed:
         raise ValueError("The audio was silent or too faint to analyze.")
@@ -1172,13 +1182,18 @@ def analyze_path(path, file_name=None, *, charts=False):
         ('Stereo phase / delay',phase_summary),
         ('Audio bandwidth',bandwidth),
         ('Digital file history',metadata['file_history']),
+        ('Embedded metadata',metadata['embedded_metadata']),
+        ('RDS / RadioText',metadata['rds']),
         ('Stereo format',stereo),
     ]
+    enrich_findings(rows, analyzed, metadata, analyzed_intervals)
     if charts:
         from spectrograms import make_evidence_charts
         metadata["spectrograms"] = make_evidence_charts(plot_sections, rows, metadata["input_rate"])
         plot_sections.clear()  # Do not preserve decoded audio beyond this call.
     metadata["analyzed_seconds"] = round(analyzed_seconds, 1)
+    metadata["sampled_intervals"] = [{"start_seconds": round(a, 2), "duration_seconds": round(b, 2)} for a,b in analyzed_intervals]
+    metadata["file_size_bytes"] = path.stat().st_size
     metadata["diagnostics"] = diag
     metadata.pop("stream_tags", None)
     metadata.pop("format_tags", None)
