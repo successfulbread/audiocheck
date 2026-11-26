@@ -1,3 +1,12 @@
+# AudioCheQ v2.4.1 validation
+
+- Added explicit Streamlit startup guard for missing or mismatched analyzer exports.
+- Engine version and app version both 2.4.1; unchanged NDR detection compared with v2.4.
+- **139 automated tests passed in three groups:** 36 startup/UI/upload; 78 core regressions; 25 additional DSP/metadata/RDS.
+- Verified `from analyzer import MAX_BYTES, ANALYZER_VERSION, analyze, analyze_path` with installed dependencies.
+- Full live Streamlit deployment has **not** been tested; the Streamlit package is unavailable in the test container.
+- Verify upload and Archive.org flow using the production Streamlit instance.
+
 # AudioCheQ v2.4 — validation
 
 ## Real user-supplied recordings (not included with the distributable code)

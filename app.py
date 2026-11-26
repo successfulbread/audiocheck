@@ -1,4 +1,4 @@
-"""AudioCheQ v2.4 - verified notch, distinct channel and phase readings."""
+"""AudioCheQ v2.4.1 - graceful startup and explicit analyzer version checks."""
 from __future__ import annotations
 
 import html
@@ -8,10 +8,35 @@ import tempfile
 
 import streamlit as st
 
-from analyzer import MAX_BYTES, ANALYZER_VERSION, analyze, analyze_path
-from archive_source import fetch_archive_audio
+APP_VERSION = "2.4.1"
+st.set_page_config(page_title="AudioCheQ v2.4.1 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
 
-st.set_page_config(page_title="AudioCheQ v2.4 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
+# Import the module before taking individual names from it. This makes a partial
+# GitHub deployment an actionable in-app message, not a redacted ImportError.
+try:
+    import analyzer as _engine
+except Exception as exc:
+    st.error("AudioCheQ could not load the audio analyzer. The deployed files or dependencies may be incomplete.")
+    st.code(f"{type(exc).__name__}: {exc}", language="text")
+    st.info("Upload every file from the complete v2.4.1 ZIP to the root of the GitHub repository, then reboot the Streamlit app.")
+    st.stop()
+
+_analyzer_loaded = getattr(_engine, "ANALYZER_VERSION", "missing")
+_required_exports = ("MAX_BYTES", "analyze", "analyze_path", "ANALYZER_VERSION")
+_missing_exports = [name for name in _required_exports if not hasattr(_engine, name)]
+if _analyzer_loaded != APP_VERSION or _missing_exports:
+    st.error("AudioCheQ detected a mismatch between the website and its audio analyzer.")
+    st.write(f"Website version: **{APP_VERSION}**; analyzer version: **{_analyzer_loaded}**.")
+    if _missing_exports:
+        st.write("Missing analyzer fields: " + ", ".join(_missing_exports))
+    st.info("Replace both app.py and analyzer.py with the matching files from the complete v2.4.1 ZIP. Commit to the deployed GitHub branch and reboot the app.")
+    st.stop()
+
+MAX_BYTES = _engine.MAX_BYTES
+ANALYZER_VERSION = _engine.ANALYZER_VERSION
+analyze = _engine.analyze
+analyze_path = _engine.analyze_path
+from archive_source import fetch_archive_audio
 
 st.markdown("""
 <style>
@@ -162,7 +187,7 @@ st.markdown('''<div class="ac-hero">
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
 <p class="ac-tagline">Find the story hidden in the sound.</p>
-<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.4 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.4.1 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -679,7 +704,7 @@ if report:
     report_version = str(meta.get("analyzer_version") or "unknown / earlier version")
     st.markdown(f'<div class="ac-analysis-build">Analyzed with engine: {html.escape(report_version)} · Current engine: {html.escape(ANALYZER_VERSION)}</div>', unsafe_allow_html=True)
     if report_version != ANALYZER_VERSION:
-        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.4 deployment completes.')
+        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.4.1 deployment completes.')
     results = sorted_findings(report.get("rows", []))
     plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(

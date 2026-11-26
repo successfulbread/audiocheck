@@ -22,7 +22,7 @@ from observations import enrich_findings
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
 
-ANALYZER_VERSION = "2.4.0"
+ANALYZER_VERSION = "2.4.1"
 NOTCH_DETECTOR_VERSION = "2.4-broad-shoulder"
 
 MAX_SECONDS = 300.0
