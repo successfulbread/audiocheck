@@ -1,35 +1,36 @@
-"""AudioCheQ v2.4.2 - graceful startup and explicit analyzer version checks."""
+"""AudioCheQ v2.4.3 - guarded analysis and actionable upload errors."""
 from __future__ import annotations
 
 import html
 from pathlib import Path
 import re
 import tempfile
+import logging
 
 import streamlit as st
 
-APP_VERSION = "2.4.2"
-st.set_page_config(page_title="AudioCheQ v2.4.2 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
+APP_VERSION = "2.4.3"
+st.set_page_config(page_title="AudioCheQ v2.4.3 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
 
 # Load this release's uniquely named engine from the SAME directory as app.py.
 # This avoids a stale analyzer.py left in GitHub or an unrelated `analyzer`
 # module elsewhere on the Python import path. There is no fallback to an old
 # analyzer, because it would silently undo the fixed NDR detection.
 import importlib.util
-ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v242.py")
+ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v243.py")
 if not ENGINE_PATH.is_file():
-    st.error("AudioCheQ v2.4.2 is missing its audio engine file.")
-    st.write("Missing: **audiocheq_engine_v242.py** beside **app.py**.")
-    st.info("Upload both files from the v2.4.2 two-file update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
+    st.error("AudioCheQ v2.4.3 is missing its audio engine file.")
+    st.write("Missing: **audiocheq_engine_v243.py** beside **app.py**.")
+    st.info("Upload both files from the v2.4.3 two-file update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
     st.stop()
 try:
-    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v242", ENGINE_PATH)
+    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v243", ENGINE_PATH)
     if not _spec or not _spec.loader:
         raise ImportError("Cannot load engine from the local Python file")
     _engine = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_engine)
 except Exception as exc:
-    st.error("AudioCheQ could not load its v2.4.2 audio engine.")
+    st.error("AudioCheQ could not load its v2.4.3 audio engine.")
     st.code(f"{type(exc).__name__}: {exc}", language="text")
     st.write(f"Engine file: `{ENGINE_PATH.name}`")
     st.info("Check that the complete ZIP contents are in the repository root and that Streamlit has finished installing packages.txt and requirements.txt.")
@@ -44,11 +45,12 @@ if _analyzer_loaded != APP_VERSION or _missing_exports:
     if _missing_exports:
         st.write("Missing engine fields: " + ", ".join(_missing_exports))
     st.write(f"Loaded engine file: `{ENGINE_PATH.name}`")
-    st.info("Replace app.py and audiocheq_engine_v242.py together from the v2.4.2 update ZIP, then reboot the app.")
+    st.info("Replace app.py and audiocheq_engine_v243.py together from the v2.4.3 update ZIP, then reboot the app.")
     st.stop()
 
 MAX_BYTES = _engine.MAX_BYTES
 ANALYZER_VERSION = _engine.ANALYZER_VERSION
+LOGGER = logging.getLogger("audiocheq")
 analyze = _engine.analyze
 analyze_path = _engine.analyze_path
 from archive_source import fetch_archive_audio
@@ -202,7 +204,7 @@ st.markdown('''<div class="ac-hero">
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
 <p class="ac-tagline">Find the story hidden in the sound.</p>
-<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.4.2 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.4.3 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -668,6 +670,7 @@ with file_tab:
     )
     if pressed and uploaded is not None:
         st.session_state.report_error = None
+        upload_success = False
         if uploaded.size > MAX_BYTES:
             st.session_state.report_error = "File too large (100 MB max)."
         else:
@@ -676,13 +679,38 @@ with file_tab:
                     name = Path(uploaded.name).name
                     rows, meta = analyze(uploaded.getvalue(), name, charts=True)
                 store_report(rows, meta, name, "Upload")
-                # Incrementing the key drops the previous browser selection.
-                st.session_state.upload_nonce += 1
-                st.rerun()
+                upload_success = True
             except ValueError as exc:
                 st.session_state.report_error = str(exc)
-            except Exception:
-                st.session_state.report_error = "Analysis failed. Check the app logs."
+            except Exception as exc:
+                LOGGER.exception("Upload analysis failed (%s, %s bytes)",
+                                 Path(uploaded.name).suffix.lower(), uploaded.size)
+                initial_type = type(exc).__name__
+                # A graph failure must not discard usable audio measurements.
+                try:
+                    with st.spinner("Trying audio analysis without graphs..."):
+                        name = Path(uploaded.name).name
+                        rows, meta = analyze(uploaded.getvalue(), name, charts=False)
+                    meta["graph_warning"] = (
+                        "The measurements succeeded, but a graph could not be drawn "
+                        f"({initial_type}). No spectral findings were changed."
+                    )
+                    store_report(rows, meta, name, "Upload")
+                    upload_success = True
+                except ValueError as retry_exc:
+                    st.session_state.report_error = str(retry_exc)
+                except Exception as retry_exc:
+                    LOGGER.exception("Upload analysis failed even without graphs")
+                    st.session_state.report_error = (
+                        "Analysis could not finish. Diagnostic: "
+                        f"{type(retry_exc).__name__}. "
+                        "Please send this error type and the traceback from Manage app > Logs."
+                    )
+        # Never catch Streamlit's rerun control-flow exception as an analysis
+        # failure; call rerun ONLY after both analysis try/except blocks.
+        if upload_success:
+            st.session_state.upload_nonce += 1
+            st.rerun()
 with archive_tab:
     with st.form("archive_form", enter_to_submit=False):
         archive_link = st.text_input("Direct audio file URL", placeholder="https://archive.org/download/record-id/track.mp3")
@@ -703,8 +731,12 @@ with archive_tab:
                 store_report(rows, meta, title, "Archive")
             except ValueError as exc:
                 st.session_state.report_error = str(exc)
-            except Exception:
-                st.session_state.report_error = "This archive link could not be analyzed. Try uploading the MP3."
+            except Exception as exc:
+                LOGGER.exception("Archive analysis failed")
+                st.session_state.report_error = (
+                    f"Archive analysis failed ({type(exc).__name__}). "
+                    "Try the direct MP3 upload or check Manage app > Logs."
+                )
 
 if st.session_state.report_error:
     st.error(st.session_state.report_error)
@@ -712,6 +744,14 @@ if st.session_state.report_error:
 report = st.session_state.report
 if report:
     meta = report.get("meta", {})
+    if meta.get("graph_warning"):
+        st.warning(str(meta["graph_warning"]))
+    if meta.get("nonfatal_issues"):
+        issues = meta["nonfatal_issues"]
+        st.info(f"{len(issues)} optional forensic check(s) could not run; other results remain available.")
+        with st.expander("Optional check diagnostics"):
+            for issue in issues:
+                st.write(str(issue))
     name = html.escape(str(report.get("name", "Recording")))
     duration = float(meta.get("duration", 0))
     st.markdown('<div class="ac-heading">What we found</div>', unsafe_allow_html=True)
@@ -719,7 +759,7 @@ if report:
     report_version = str(meta.get("analyzer_version") or "unknown / earlier version")
     st.markdown(f'<div class="ac-analysis-build">Analyzed with engine: {html.escape(report_version)} · Current engine: {html.escape(ANALYZER_VERSION)}</div>', unsafe_allow_html=True)
     if report_version != ANALYZER_VERSION:
-        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.4.2 deployment completes.')
+        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.4.3 deployment completes.')
     results = sorted_findings(report.get("rows", []))
     plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(
