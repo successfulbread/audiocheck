@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 from io import BytesIO
+from PIL import Image
 import math
 
 import numpy as np
@@ -432,6 +433,106 @@ def render_tuning_evidence(tuning):
             'caption':'Votes from real detected pitched spectral peaks. Clustered tuning does not establish a playback-speed error; other temperament and instrument harmonics can bias this estimate.'}
 
 
+def _compact_spectrogram_png(fig):
+    # Palette compression preserves the plotted measurement and colour ordering
+    # while keeping evidence within Streamlit's per-card inline-image budget.
+    image=Image.open(BytesIO(_figure_bytes(fig))).convert('RGB')
+    image=image.quantize(colors=160,dither=Image.Dither.NONE)
+    output=BytesIO()
+    image.save(output,format='PNG',optimize=True)
+    return output.getvalue()
+
+
+def render_boxed_spectrogram(audio, kind, start_seconds=0.0, original_rate=44100,
+                              measured_hz=None, supported=False, bandwidth=None):
+    """Real time/frequency spectrogram. A border encloses evidence; no drawn line
+    overlaps a measured frequency trace. A box is never itself a detection.
+
+    Supports mains (50/60 Hz), ndr (9.6-10.5 kHz notch), cutoff (upper audio).
+    """
+    audio=np.asarray(audio)
+    if audio.ndim not in (1,2) or len(audio) < AUDIO_RATE*5:
+        raise ValueError('Five seconds of decoded audio are needed for evidence.')
+    band=bandwidth if isinstance(bandwidth,dict) else {}
+    if kind not in ('mains','ndr','cutoff'):
+        raise ValueError('Unsupported spectrogram evidence type.')
+    if kind=='ndr' and original_rate < 22500:
+        raise ValueError('Sample rate cannot preserve the full 10 kHz filter band.')
+    if kind=='cutoff' and original_rate < 24000:
+        raise ValueError('Sample rate too low to show meaningful high-end bandwidth.')
+    if kind=='mains':
+        nominal=50.0 if measured_hz is None else float(measured_hz)
+        channel, channel_label=_pick_channel(audio,nominal,'mains')
+        y=signal.resample_poly(channel,20,441)
+        fs=2000
+        f,t,db=_stft(y,fs,8000)  # 0.25 Hz resolution
+        panels=[(45,66,'Mains frequency: 50 or 60 Hz', nominal),
+                (94,128,'Possible 100 or 120 Hz harmonic',nominal*2)]
+    else:
+        default=10000 if kind=='ndr' else 15500
+        channel,channel_label=_pick_channel(audio,default,'ndr' if kind=='ndr' else 'fm')
+        f,t,db=_stft(channel,AUDIO_RATE,16384 if kind=='ndr' else 8192)
+        if kind=='ndr':
+            panels=[(9500,10530,'10 kHz-band filter gap (darker = less sound)',measured_hz)]
+        else:
+            cutoff = (band.get('estimated_cutoff_khz') or 0)*1000
+            panels=[(9000,min(21000.,original_rate/2 - 80.),'High-frequency response and possible cutoff',cutoff)]
+    fig=Figure(figsize=(7.65,4.9 if len(panels)>1 else 3.45),dpi=105,facecolor=PAPER)
+    axes=fig.subplots(len(panels),1)
+    if len(panels)==1: axes=[axes]
+    boxes=[]
+    for ax,(lo,hi,title,center) in zip(axes,panels):
+        mask=(f>=lo)&(f<=hi)
+        frequencies=f[mask]
+        values=db[mask]
+        if len(frequencies)<7 or len(t)<2: raise ValueError('Insufficient spectrogram resolution.')
+        # Reduce raster size on larger bands without spectral normalization.
+        step=max(1,int(np.ceil(len(frequencies)/950)))
+        frequencies=frequencies[::step];values=values[::step,:]
+        top=float(np.percentile(values,99.7))
+        bottom=top-float(np.clip(top-np.percentile(values,14),32,60))
+        ax.pcolormesh(t,frequencies,values,cmap='inferno',shading='nearest',vmin=bottom,vmax=top,rasterized=True)
+        ax.set_facecolor('#08081B')
+        ax.set(xlim=(float(t[0]),float(t[-1])),ylim=(lo,hi))
+        ax.set_title(title,loc='left',fontsize=10,color=INK,pad=7,fontweight='bold')
+        ax.set_ylabel('Frequency (Hz)',color=MUTED,fontsize=8)
+        ax.set_xlabel('Time in excerpt (seconds)',color=MUTED,fontsize=8)
+        ax.tick_params(labelsize=8,colors=MUTED)
+        for spine in ax.spines.values(): spine.set_color('#CBD7E5')
+        # Reference ticks are on the frame, not drawn over evidence.
+        if kind=='mains':
+            ticks=[50,60] if lo<70 else [100,120]
+            ax.set_yticks(ticks)
+        if supported and isinstance(center,(int,float)) and np.isfinite(center) and lo<center<hi:
+            if kind=='mains': width_hz=1.4 if lo<70 else 2.3
+            elif kind=='ndr':
+                width_hz= max(32., min(120.,float(band.get('notch_width_hz') or 50)*1.2))
+            else:
+                width_hz= 700.  # highlight a transition band, not an exact brickwall
+            box_low=max(lo+0.2,float(center)-width_hz)
+            box_high=min(hi-0.2,float(center)+width_hz)
+            tlen=float(t[-1]-t[0]);x0=float(t[0]+tlen*.09)
+            ax.add_patch(Rectangle((x0,box_low),tlen*.82,box_high-box_low,
+                                   fill=False,linewidth=2,edgecolor='#66F0DE',
+                                   clip_on=True,zorder=10))
+            boxes.append((float(center),box_high-box_low))
+    fig.subplots_adjust(left=.13,right=.96,top=.90,bottom=.17 if len(panels)==1 else .10,hspace=.55)
+    span=f'{start_seconds:.0f}–{start_seconds+len(audio)/AUDIO_RATE:.0f} s'
+    if kind=='mains':
+        insight=('The turquoise outlines mark the measured frequency and its possible harmonic.'
+                 if boxes else 'No mains frequency was sufficiently supported to mark a peak.')
+        insight+=' A bright horizontal stripe is energy staying at one frequency.'
+    elif kind=='ndr':
+        insight=(f'The outlined DARK band is centred near {boxes[0][0]:,.0f} Hz; it is a reduction of high-frequency energy, not a tone.'
+                 if boxes else 'No verified 10 kHz notch was outlined; a darker area alone is not conclusive.')
+    else:
+        insight=(f'The outline surrounds the approximate {boxes[0][0]/1000:.1f} kHz upper-frequency transition. '
+                 if boxes else 'No reliable, specific upper-frequency cutoff was outlined. ')
+        insight+='A sharp reduction above about 15 kHz is compatible with FM filtering but also with MP3 encoding or subsequent processing.'
+    return {'png':_compact_spectrogram_png(fig),'caption':f'Real audio measured, {span}, {channel_label}. {insight} Colour is signal level; no reference lines cross the measured signal.',
+            'kind':kind,'section_start_s':start_seconds}
+
+
 def make_evidence_charts(sections, findings, original_rate):
     """Default to spectra showing actual measured peaks, not spectrogram heatmaps.
 
@@ -488,4 +589,42 @@ def make_evidence_charts(sections, findings, original_rate):
                                                    'kind':measure,'start':section['start']})
                 break
             except (ValueError,RuntimeError,MemoryError):continue
+    # Time/frequency diagrams complement the existing peak plots, but do not
+    # affect a detector's result. Always put the heatmap first in each panel.
+    for key,kind in [('Likely power system','mains'),
+                     ('NDR-style 10 kHz dip','ndr'),
+                     ('Likely audio source','cutoff')]:
+        if key not in result: continue
+        report=result.get(key) or {}
+        supported=(report.get('certainty') in ('High','Strong','Possible','Tentative')
+                   and not str(report.get('result','')).lower().startswith(('no ','not ')))
+        bw=((report.get('frequency_clue') or {}).get('metrics') or {}) if kind=='cutoff' else {}
+        if kind=='cutoff':
+            cutoff=bw.get('estimated_cutoff_khz')
+            nyquist=bw.get('nyquist_khz')
+            is_sample_limited=bool(cutoff and nyquist and cutoff>=nyquist-1.3)
+            supported=bool(supported and isinstance(cutoff,(int,float)) and
+                           10.0<=cutoff<=19.8 and not is_sample_limited and
+                           bw.get('sharp_sections',0)>0)
+            target=(float(cutoff)*1000) if supported else None
+        elif kind=='ndr':
+            target=(report.get('metrics') or {}).get('notch_median_hz')
+            bw={'notch_width_hz':(report.get('metrics') or {}).get('notch_width_hz')}
+            supported=supported and 'detected' in str(report.get('result','')).lower()
+        else:
+            target=50 if '50 Hz' in str(report.get('result','')) else 60
+            supported=supported and any(x in str(report.get('result','')) for x in ('50 Hz','60 Hz'))
+        if kind=='cutoff' and original_rate<24000:continue
+        if kind=='ndr' and original_rate<22500:continue
+        try:
+            selected=max(sections,key=lambda x:_window_score(x,'ndr' if kind=='ndr' else 'mains',None))
+            figure=render_boxed_spectrogram(selected['audio'],kind,selected['start'],
+                original_rate, measured_hz=target,supported=supported,bandwidth=bw)
+            blob=base64.b64encode(figure['png']).decode('ascii')
+            if len(blob)<=400000:
+                charts.setdefault(key,[]).insert(0,{'image_base64':blob,
+                    'caption':figure['caption'],'kind':kind+'-spectrogram',
+                    'start':figure['section_start_s']})
+        except (ValueError,RuntimeError,MemoryError):
+            continue
     return charts

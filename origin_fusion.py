@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from math import isfinite
 
-LABELS = ('Vinyl / Record', 'Cassette / Tape', 'FM radio', 'AM radio', 'Digital source')
+LABELS = ('Vinyl / Record', 'Cassette / Tape', 'FM radio', 'AM radio', 'TV / Video signal', 'Digital source')
 CONFIRMED = ('Strong', 'High')
 USABLE = CONFIRMED + ('Possible', 'Tentative')
 
@@ -129,8 +129,14 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
     if ('delay' in phase_result or 'polarity' in phase_result) and phase.get('certainty') in USABLE:
         add('Cassette / Tape', .45,
             'The channel alignment differs slightly; this can occur during analog copying or unrelated stereo processing.')
-    if 'ntsc' in str(broadcast.get('result','')).lower() or 'pal' in str(broadcast.get('result','')).lower():
-        context.append('A TV scanning tone points to interference in the signal chain, not necessarily to an FM or TV source.')
+    tv_result = str(broadcast.get('result', '')).lower()
+    if any(name in tv_result for name in ('ntsc', 'pal/secam', 'tv interference')) and broadcast.get('certainty') in USABLE:
+        # It may be a TV-derived recording, or ordinary music that acquired
+        # monitor interference during a later transfer. Never call it proof.
+        add('TV / Video signal', 4.0 if broadcast.get('certainty') in CONFIRMED else 2.4,
+            'A stable 15.625/15.734 kHz TV scanning signature suggests a television/video-related stage, but may simply be interference.',
+            'support')
+        context.append('TV scanning interference may enter through a monitor during copying; it cannot establish that the music was broadcast on television.')
     if power.get('certainty') in USABLE:
         context.append('50/60 Hz electrical hum identifies possible equipment or copying-region interference, not a recording medium.')
     if speed.get('certainty') in CONFIRMED:
@@ -169,27 +175,43 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
     margin=points-scores[runner]
     specific=sum(x=='specific' for x in evidence_strengths[winner])
     independent=len(evidence[winner])
-    if winner=='Digital source':
+
+    # A transparent HEURISTIC confidence percentage, not a calibrated
+    # posterior probability. Relative advantage AND absolute evidence matter.
+    # An isolated 10 kHz filter dip or TV scanning tone cannot become '90%'
+    # simply because competing media have no positive fingerprints.
+    if winner == 'Digital source':
+        percent=32 if points < 1.5 else 38
+    else:
+        dominance=points / (points + scores[runner] + 2.7) if points else 0.0
+        completeness=min(1., points / 6.)
+        percent=round(35 + 62 * dominance * completeness)
+        if winner in ('AM radio', 'TV / Video signal') and specific < 1:
+            percent=min(percent, 64)
+        if winner == 'FM radio' and specific < 1 and independent < 2:
+            percent=min(percent, 59)  # an isolated 10kHz filter is not an FM ID
+        percent=max(26, min(95, percent))
+
+    if winner == 'Digital source':
         certainty='Tentative'
         result='Best guess: Digital source'
-    elif winner=='AM radio':
-        certainty='Possible' if points>=2.5 and margin>=1 else 'Tentative'
-        result='Possible AM Radio'
     else:
-        # A high-confidence verdict requires a medium-specific strong cue or
-        # independent corroboration. One 10kHz notch alone stays possible.
-        high= (points>=6.0 and margin>=2.8 and (specific>=1 or independent>=2))
-        moderate=(points>=2.0 and margin>=.6)
-        certainty='High' if high else 'Possible' if moderate else 'Tentative'
-        result=('Likely ' if high else 'Possible ' if moderate else 'Tentative ') + winner
+        certainty = 'High' if percent >= 70 and (specific or independent >= 2) else 'Possible' if percent >= 48 else 'Tentative'
+        result=('Likely ' if certainty=='High' else 'Possible ' if certainty=='Possible' else 'Tentative ') + winner
+    if winner == 'TV / Video signal':
+        result = ('Possible ' if certainty!='Tentative' else 'Tentative ') + 'TV / video-related signal'
+        certainty = 'Possible' if certainty=='High' else certainty
+
     detail_parts = evidence[winner] + context[:4]
-    detail_parts.append(f'Clue ranking: {points:.1f} points vs {scores[runner]:.1f} for {runner}; these are comparative weights, not probabilities.')
-    detail_parts.append('The result describes the most likely recorded/transferred signal path; several media can occur in sequence.')
+    detail_parts.append(f'Best source clue score: {points:.1f} versus {scores[runner]:.1f} for {runner}.')
+    detail_parts.append('This is a heuristic estimate of confidence in the signal path, not the statistical odds that the original studio recording used this format.')
+    detail_parts.append('A song may have passed through radio, tape, vinyl and digital files in succession.')
     ordered=sorted(scores.items(),key=lambda x:-x[1])
     return {'result':result,'certainty':certainty,'detail':' '.join(detail_parts),
-            'evidence': evidence[winner][:5], 'context':context,
-            'alternative':runner,'guess_percent':None,'fallback_guess':winner=='Digital source',
+            'evidence': evidence[winner][:6], 'context':context,
+            'alternative':runner,'guess_percent':int(percent),'fallback_guess':winner=='Digital source',
             'metrics': {'clue_scores':{k:round(v,2) for k,v in ordered},
                         'leading_score':round(points,2), 'runner_up_score':round(scores[runner],2),
                         'score_margin':round(margin,2),'independent_supports':independent,
-                        'specific_supports':specific}}
+                        'specific_supports':specific,'confidence_percent':int(percent),
+                        'source_rank':winner}}

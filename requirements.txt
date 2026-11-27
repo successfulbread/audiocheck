@@ -3,3 +3,4 @@ numpy>=1.26,<3
 scipy>=1.13,<2
 mutagen>=1.47,<2
 matplotlib>=3.8,<4
+Pillow>=10,<13

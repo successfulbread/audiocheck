@@ -1,40 +1,32 @@
-# AudioCheQ v2.5.0 — Forensic evidence and readable results
+# AudioCheQ v2.6.0 — Responsive forensic results and boxed spectrograms
 
-A five-minute audio-forensic tool for identifying source and recording-chain clues in MP3, FLAC, WAV, OGG, and M4A files. The app does **not** identify music by database or claim to authenticate an artist, date or broadcaster from a frequency signature.
+An audio forensic web app for MP3, WAV, FLAC, OGG and M4A recordings. Supports five-minute uploads, Archive.org URL imports, source-path clues, NDR-style 10 kHz band notches, mains hum, radio/TV interference, stereo phase, speed/wow/flutter, embedded metadata and optional RDS decoding for suitable raw FM multiplex recordings.
 
-## What's improved in 2.5.0
+## Changes in v2.6.0
 
-- **Resolved optional `measured descriptions: TypeError`** for non-text and irregular tag values. Observation notes now normalize numbers, dates, missing fields and unusual metadata structures. Remaining edge cases only affect explanatory notes, never actual signal results.
-- **Evidence-led likely origin**: an independent `origin_fusion.py` combines vinyl rotation/clicks, crackle, tape dropouts, 19 kHz FM pilot, RDS *actually decoded from raw multiplex data*, 10 kHz filter notch, bandwidth, plausible wow/flutter and channel timing. Electrical hum and TV scan signals are reported as *context* but are not used as proof of FM. Confidence rises when specific, independent clues agree. An MP3 codec is not treated as proof of a digitally recorded original.
-- **Combined Stereo/Mono & Phase**: a single result card with one highlighted stored-channel classification, greying the alternatives and showing numerical correlation and channel delay where measured.
-- **Readable “Why?”**: explanation first, followed by a compact list of actual measurements from this file, in the same disclosure. No separate nested technical disclosure. A source-score display is clearly labelled as relative clue weights, **not probabilities**.
-- **Embedded metadata in the card**: title, artist, album, comments, URLs, encoder tags and additional readable fields are displayed as a scrollable list *inside* the “Why?” section, with a full tabular copy in File details. All text is escaped to prevent HTML injection.
-- **Power-frequency geography**: examples of many countries using 50/60 Hz (including Japan's east/west split) are shown with a warning that hum can be introduced during a later transfer.
-- **Peak plots**: unfilled orange outline rectangles surround measured peaks and troughs; no lines are drawn through the measured graph. The optional full spectrogram renderer retains frequency reference labels on the axes, not across the data.
-- **More conservative wow handling**: an extreme, unstable reference-tone track no longer produces a false claim of normal tape wow. The suspicious raw measurement is still explained.
-- **The 10 kHz notch detector is unchanged from v2.4**. Both of the known MP3 examples still register the characteristic band dip.
+- **Responsive result cards:** The origin result spans the desktop layout, while other result cards sit in two columns on large screens and one column on phones/tablets (up to 1020 CSS pixels). Opening a technical explanation no longer forces every graphed card to use the full row.
+- **Origin ranking:** Six paths are considered: vinyl, cassette/tape, FM radio, AM radio, TV/video-related and digital. A transparent *estimated evidence confidence percentage* considers both absolute source-specific evidence and the strongest alternative. It is a heuristic indication, **not a calibrated probability** or proof of an original master. The origin card displays leading reasons and additional evidence in its single Why? section.
+- **Bandwidth evidence:** The source report now retains measured upper-frequency reach, a median relative 15 kHz attenuation, the number of sharp-cutoff sections and the original sample-rate ceiling. The graph highlights a true measured transition only when independently supported and not created by the digital sample-rate limit. FM audio normally has a near-15 kHz upper audio limit, but MP3, copy filters and tape equipment can create similar cutoffs.
+- **TV signal path:** A 15,625 Hz / 15,734 Hz signal can rank TV/video as a *possible* source or copying stage; it does not prove the music was broadcast from TV. A pure TV tone receives an intentionally capped percentage.
+- **Channels & phase balance:** Clear main verdicts for mono, dual mono, stereo, and possible channel delays/phase inversion; a single Why? explains correlation and offset values in plain language with technical measurements.
+- **Real frequency spectrograms:** Boxed frequency/time plots for 50/60 Hz hum and harmonic, the detected 10 kHz dip and possible upper-frequency cutoff. No reference line is drawn through the measured tone or dip. The existing detailed peak-spectrum plots remain available. Images are palette-compressed to reliably fit within Streamlit's image embedding limit without changing spectral measurements.
+- **Dedicated versioned engine:** `app.py` loads `audiocheq_engine_v260.py` beside it. The bundled legacy `analyzer.py` is the matching v2.6.0 code for older tests/integrations. Neither file falls back to previous engines.
 
-## Deploy to Streamlit Community Cloud
+## Update GitHub / Streamlit Cloud
 
-1. Extract the full ZIP on your computer. Do **not** commit the ZIP itself as the app: GitHub does not unpack ZIPs.
-2. Upload the extracted project files into the **root of the deployed GitHub repository**, replacing existing files. Include the hidden `.streamlit` folder and new `origin_fusion.py` module.
-3. Commit on the branch selected in Streamlit Cloud, and choose **Manage app → Reboot app** to clear stale imports.
-4. The website heading must show **v2.5.0** and a new report must say **Analyzed with engine: 2.5.0**.
-5. `app.py` explicitly imports `audiocheq_engine_v250.py` alongside it; an older `analyzer.py` cannot silently override it. The ZIP also includes a matching `analyzer.py` for legacy tests / integrations. Older versioned engine modules can be removed from GitHub, but aren't imported by this build.
+1. Unzip the **complete project ZIP**. Upload its **contents**, not the ZIP, into the root of the GitHub repository used by Streamlit. Replace existing files, including `app.py`, `analyzer.py`, `origin_fusion.py`, `spectrograms.py`, `.streamlit/config.toml`, `requirements.txt` and **add** `audiocheq_engine_v260.py`.
+2. Commit to the actually deployed GitHub branch, then open Streamlit's **Manage app → Reboot app**.
+3. Confirm the heading reads **v2.6.0** and a new report reads **Analyzed with engine: 2.6.0**. If a previous report is still visible, upload the file again to regenerate its findings and charts.
+4. The five-file update ZIP is suitable only when the other supporting v2.5.0 files are already current. The full project is safer when deployments have shown module mismatches.
 
-A smaller update archive contains `app.py`, `audiocheq_engine_v250.py`, `analyzer.py`, `origin_fusion.py`, `observations.py`, and `spectrograms.py`. All six are necessary for a minimal upgrade from v2.4.3.
+## Interpretation limits
 
-## Evidence limitations
-
-- Relative origin scores are heuristics, **not statistically calibrated probabilities** or verified origin claims. An FM broadcast recorded to cassette can carry signatures of both media.
-- A 10 kHz dip may reflect historical broadcast filtering; it does not establish NDR as the broadcaster. A 50/60 Hz hum may have been introduced during any recording/copying stage and cannot establish the performer's country.
-- Stereo/phase measurements describe the **present file** and can change with mixing and later transfers.
-- Not all recordings contain stable enough electrical/TV/FM tones to estimate wow/flutter or absolute playback speed. Musical tuning cannot, alone, prove a speed error.
-- `redsea` must be available on the host to decode real 57 kHz RDS multiplex data; ordinary audio files generally do not contain it. This auto-install route has not been verified on the user's live Streamlit server.
-- The code and browser-static layout have been tested locally. **The live Streamlit deployment and redsea bootstrap remain unverified**.
+- The percentages are heuristic evidence-confidence indicators; **they are not statistically calibrated odds** or measured certainty about the original studio format. One song can have passed through several media (radio → cassette → MP3, etc.).
+- The NDR-style 10 kHz dip is a meaningful filter clue, but it does not uniquely identify NDR or FM. Likewise, 50/60 Hz hum cannot identify the artist's country, and a 15,734 Hz TV scan tone may reflect monitor interference during a later transfer.
+- Musical A440 tuning, wow/flutter and sample-rate cutoffs need corroboration before concluding that playback speed or original recording technology is known.
+- On-air RDS decoding requires high-rate raw multiplex audio and the optional redsea utility; normal music recordings rarely preserve 57 kHz RDS.
+- Streamlit/Redsea behaviour on the **live** hosting service has not been confirmed by these local automated tests.
 
 ## Development
 
-Run `pip install -r requirements.txt`, install FFmpeg (see `packages.txt`), and use `streamlit run app.py`.
-
-Tests: `PYTHONPATH=. pytest -q tests/` (on a sufficiently provisioned machine). The tests use synthetic signals and do not ship the user's recordings.
+Install FFmpeg and the Linux packages listed in `packages.txt`; run `pip install -r requirements.txt` and `streamlit run app.py`. For regression tests: `PYTHONPATH=. pytest -q tests/`. Test audio files from the user are **not shipped** in this project ZIP.

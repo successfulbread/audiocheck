@@ -24,7 +24,7 @@ from origin_fusion import score_origin
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
 
-ANALYZER_VERSION = "2.5.0"
+ANALYZER_VERSION = "2.6.0"
 NOTCH_DETECTOR_VERSION = "2.4-broad-shoulder"
 LOGGER = logging.getLogger("audiocheq.analyzer")
 
@@ -1054,33 +1054,48 @@ def _bandwidth_verdict(windows, metadata, broadcast):
     fm_present='FM radio pilot' in broadcast.get('result','') and broadcast.get('certainty') in ('High','Possible','Tentative')
     bitrate=metadata.get('file_history',{}).get('facts',{}).get('bitrate_kbps')
     mp3_compressed=(metadata['codec']=='mp3' and bitrate is not None and bitrate<=160)
+    # Not all high-frequency limits are broadcast filters: sample Nyquist,
+    # lossy encoding, tape copying, and an authentic FM low-pass differ.
+    # Keep the measured evidence for the plotted source report.
+    feature_metrics={
+        'estimated_cutoff_khz':round(cutoff,2),
+        'nyquist_khz':round(limit,2),
+        'sharp_sections':sum(bool(w['sharp_fm']) for w in features),
+        'tested_sections':len(features),
+        'median_15khz_drop_db':round(float(np.median([w['drop_db'] for w in features if w.get('drop_db') is not None])),1)
+            if any(w.get('drop_db') is not None for w in features) else None,
+        'codec_bitrate_kbps':bitrate,
+    }
+    def with_measurements(report):
+        report['metrics']=feature_metrics
+        return report
     if limit < 18 and cutoff >= limit-1.2:
-        return verdict(f'Sample rate limits audio to ~{limit:g} kHz','High',
-            f'This file cannot contain frequencies above {limit:g} kHz because of its sampling rate. Not proof of the original source.')
+        return with_measurements(verdict(f'Sample rate limits audio to ~{limit:g} kHz','High',
+            f'This file cannot contain frequencies above {limit:g} kHz because of its sampling rate. Not proof of the original source.'))
     if sharp and 13.5<=cutoff<=17.5:
         if fm_present:
-            return verdict(f'FM-like cutoff (~{cutoff:g} kHz)','Possible',
-                f'Sound drops sharply around {cutoff:g} kHz and an FM pilot was found. Both fit an FM radio transfer.')
+            return with_measurements(verdict(f'FM-like cutoff (~{cutoff:g} kHz)','Possible',
+                f'Sound drops sharply around {cutoff:g} kHz and an FM pilot was found. Both fit an FM radio transfer.'))
         if mp3_compressed:
-            return verdict(f'MP3-like cutoff (~{cutoff:g} kHz)','Possible',
-                f'A sharp drop around {cutoff:g} kHz fits low-bitrate MP3 filtering ({bitrate} kbps). FM is another possibility.')
-        return verdict(f'Sharp cutoff (~{cutoff:g} kHz)','Possible',
-            f'Sound drops abruptly around {cutoff:g} kHz. FM broadcast or digital filtering could cause this.')
+            return with_measurements(verdict(f'MP3-like cutoff (~{cutoff:g} kHz)','Possible',
+                f'A sharp drop around {cutoff:g} kHz fits low-bitrate MP3 filtering ({bitrate} kbps). FM is another possibility.'))
+        return with_measurements(verdict(f'Sharp cutoff (~{cutoff:g} kHz)','Possible',
+            f'Sound drops abruptly around {cutoff:g} kHz. FM broadcast or digital filtering could cause this.'))
     if cutoff<=10.5:
-        return verdict(f'Narrow range (~{cutoff:g} kHz)','Possible',
-            f'Little sound energy survives above {cutoff:g} kHz. Older tape, radio, filtering or MP3 compression could explain it.')
+        return with_measurements(verdict(f'Narrow range (~{cutoff:g} kHz)','Possible',
+            f'Little sound energy survives above {cutoff:g} kHz. Older tape, radio, filtering or MP3 compression could explain it.'))
     if cutoff<=16.5:
         reason=f'High-frequency sound is weak above roughly {cutoff:g} kHz.'
         if mp3_compressed:
             reason+=f' {bitrate} kbps MP3 compression may contribute.'
         else:
             reason+=' Tape, radio, older transfers or compression may contribute.'
-        return verdict(f'Limited highs (~{cutoff:g} kHz)','Possible',reason)
+        return with_measurements(verdict(f'Limited highs (~{cutoff:g} kHz)','Possible',reason))
     if cutoff>=18:
-        return verdict(f'Wide range (~{cutoff:g} kHz)','High',
-            f'Energy remains near {cutoff:g} kHz. It could include hiss or crackle, so this does not prove a digital original.')
-    return verdict(f'Audio reaches ~{cutoff:g} kHz','High',
-        f'Audio/noise energy was measured up to around {cutoff:g} kHz. This alone cannot identify a format.')
+        return with_measurements(verdict(f'Wide range (~{cutoff:g} kHz)','High',
+            f'Energy remains near {cutoff:g} kHz. It could include hiss or crackle, so this does not prove a digital original.'))
+    return with_measurements(verdict(f'Audio reaches ~{cutoff:g} kHz','High',
+        f'Audio/noise energy was measured up to around {cutoff:g} kHz. This alone cannot identify a format.'))
 
 
 def _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, meta, stereo=None):

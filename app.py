@@ -1,4 +1,4 @@
-"""AudioCheQ v2.5.0 - integrated source evidence and readable forensic findings."""
+"""AudioCheQ v2.6.0 - integrated source evidence and readable forensic findings."""
 from __future__ import annotations
 
 import html
@@ -9,28 +9,28 @@ import logging
 
 import streamlit as st
 
-APP_VERSION = "2.5.0"
-st.set_page_config(page_title="AudioCheQ v2.5.0 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
+APP_VERSION = "2.6.0"
+st.set_page_config(page_title="AudioCheQ v2.6.0 | Find the clues", page_icon=":material/graphic_eq:", layout="wide", initial_sidebar_state="collapsed")
 
 # Load this release's uniquely named engine from the SAME directory as app.py.
 # This avoids a stale analyzer.py left in GitHub or an unrelated `analyzer`
 # module elsewhere on the Python import path. There is no fallback to an old
 # analyzer, because it would silently undo the fixed NDR detection.
 import importlib.util
-ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v250.py")
+ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v260.py")
 if not ENGINE_PATH.is_file():
-    st.error("AudioCheQ v2.5.0 is missing its audio engine file.")
-    st.write("Missing: **audiocheq_engine_v250.py** beside **app.py**.")
-    st.info("Upload both files from the v2.5.0 two-file update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
+    st.error("AudioCheQ v2.6.0 is missing its audio engine file.")
+    st.write("Missing: **audiocheq_engine_v260.py** beside **app.py**.")
+    st.info("Upload the matching files from the v2.6.0 update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
     st.stop()
 try:
-    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v250", ENGINE_PATH)
+    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v260", ENGINE_PATH)
     if not _spec or not _spec.loader:
         raise ImportError("Cannot load engine from the local Python file")
     _engine = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_engine)
 except Exception as exc:
-    st.error("AudioCheQ could not load its v2.5.0 audio engine.")
+    st.error("AudioCheQ could not load its v2.6.0 audio engine.")
     st.code(f"{type(exc).__name__}: {exc}", language="text")
     st.write(f"Engine file: `{ENGINE_PATH.name}`")
     st.info("Check that the complete ZIP contents are in the repository root and that Streamlit has finished installing packages.txt and requirements.txt.")
@@ -45,7 +45,7 @@ if _analyzer_loaded != APP_VERSION or _missing_exports:
     if _missing_exports:
         st.write("Missing engine fields: " + ", ".join(_missing_exports))
     st.write(f"Loaded engine file: `{ENGINE_PATH.name}`")
-    st.info("Replace app.py and audiocheq_engine_v250.py together from the v2.5.0 update ZIP, then reboot the app.")
+    st.info("Replace app.py and audiocheq_engine_v260.py together from the v2.6.0 update ZIP, then reboot the app.")
     st.stop()
 
 MAX_BYTES = _engine.MAX_BYTES
@@ -59,7 +59,7 @@ st.markdown("""
 <style>
 html, body, .stApp {font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;}
 .stApp {background:linear-gradient(165deg,#101827 0%,#151329 60%,#101827 100%);color:#F2F6FF;}
-.block-container {max-width:980px;padding-top:1.1rem;padding-bottom:3rem;}
+.block-container {max-width:1280px;padding-top:1.1rem;padding-bottom:3rem;}
 header[data-testid="stHeader"] {background:transparent;}
 .ac-hero {position:relative;overflow:hidden;background:linear-gradient(111deg,#4F46E5 0%,#9333EA 54%,#E34E83 100%);
  border:1px solid #B9A3FF;border-radius:24px;box-shadow:0 16px 32px #03071355;padding:26px 29px;margin:0 0 20px;}
@@ -99,7 +99,8 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-card details ul {margin:9px 0 0;padding-left:20px;}
 .ac-card details li {margin:6px 0;}
 .ac-card.none details p,.ac-card.none details li {color:#D5DCEA;}
-.ac-card.has-spectrogram {grid-column:1 / -1;}
+.ac-card.ac-feature {grid-column:1 / -1;}
+.ac-grid {align-items:start;}
 .ac-metrics {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;
  margin:13px 0;padding:10px;background:#FFFFFF80;border-radius:10px;}
 .ac-metric {display:flex;flex-direction:column;font-size:.75rem;line-height:1.34;gap:3px;color:#405570;}
@@ -164,7 +165,7 @@ header[data-testid="stHeader"] {background:transparent;}
  padding:11px 14px;color:#ECFFF8;font-weight:750;margin:11px 0 13px;
  overflow-wrap:anywhere;}
 .ac-file-waiting {font-size:.85rem;color:#C7D2E8;margin:11px 0 13px;}
-@media(max-width:675px){.ac-grid{grid-template-columns:1fr;gap:11px;}
+@media(max-width:1020px){.ac-grid{grid-template-columns:1fr;gap:11px;}
  .ac-hero{padding:21px 18px}.ac-hero-mark{width:115px;right:2px;top:2px;opacity:.23;}
  .block-container{padding-top:.55rem}.ac-card{padding:14px 15px 12px;}.ac-top{margin-bottom:8px;}}
 
@@ -203,6 +204,19 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-card.none .ac-tag-field strong,.ac-card.none .ac-tag-field span{color:#EAF2FC}
 .ac-source-scores{font-size:.79rem;line-height:1.5;margin:11px 0;color:#385A75;}
 .ac-card.none .ac-source-scores{color:#DDE9F2;}
+
+.ac-card.ac-feature {padding:19px 21px;}
+.ac-origin-summary {margin-top:10px;padding:11px 13px;border-radius:12px;background:#FFFFFFB8;
+ border:1px solid #B1C4D3;line-height:1.5;font-size:.85rem;color:#23405E;}
+.ac-card.none .ac-origin-summary {background:#34445A;color:#E3EAF5;border-color:#556579;}
+.ac-confidence {display:inline-flex;gap:6px;align-items:baseline;color:#0F5853;
+ font-weight:850;font-size:1.45rem;margin:6px 0 4px;}
+.ac-confidence small {font-size:.73rem;font-weight:700;color:#406777;}
+.ac-card.none .ac-confidence,.ac-card.none .ac-confidence small {color:#D8F2EC;}
+.ac-source-alternatives {display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;font-size:.76rem;color:#39546B;}
+.ac-source-alternatives span {padding:6px 9px;border-radius:8px;background:#FFFFFF99;border:1px solid #B2C3D9;}
+@media(max-width:1020px) {.ac-card.ac-feature {grid-column:1;} }
+@media(min-width:1021px) {.ac-card.ac-feature .ac-result {font-size:1.44rem;}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -219,7 +233,7 @@ st.markdown('''<div class="ac-hero">
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
 <p class="ac-tagline">Find the story hidden in the sound.</p>
-<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.5.0 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.6.0 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -257,9 +271,9 @@ def badge_class(item):
 
 
 LABELS = {
-    'Likely audio source': ('Most likely origin', '&#9835;'),
+    'Likely audio source': ('Most likely origin & confidence', '&#9835;'),
     'NDR-style 10 kHz dip': ('10 kHz broadcast-filter dip', '&#9836;'),
-    'Stereo / phase': ('Stereo, mono & channel alignment', '&#8646;'),
+    'Stereo / phase': ('Channels & phase balance', '&#8646;'),
     'Vinyl rotation': ('Record rotation', '&#9673;'),
     'Likely power system': ('Electrical hum', '&#9889;'),
     'Radio / TV signals': ('TV scanning signals', '&#9737;'),
@@ -285,7 +299,18 @@ def display_result(key, item):
             return 'Cannot assess 10 kHz'
         return 'No confirmed 10 kHz dip'
     if key == 'Stereo / phase':
-        return raw
+        phase=str(item.get('phase_result') or '').lower()
+        if 'dual mono' in raw:
+            return 'Dual mono — nearly identical channels'
+        if raw.lower()=='mono':
+            return 'Mono — one audio channel'
+        if raw.lower()=='stereo':
+            if 'polarity' in phase or 'opposite-phase' in phase:
+                return 'Stereo — phase reversal suspected'
+            if 'delay' in phase:
+                return 'Stereo — channel delay detected'
+            return 'Stereo — distinct left/right channels'
+        return 'Channel format uncertain'
     if key == 'Vinyl rotation' and not meaningful(item):
         return 'No reliable RPM pattern'
     if key == 'FM stereo pilot' and not meaningful(item):
@@ -332,9 +357,9 @@ def why(key, item):
         delay=m.get('median_delay_ms',m.get('delay_ms'))
         parts=[]
         if isinstance(corr,(float,int)):
-            parts.append(f'left/right correlation {corr:+.3f} (1.000 means identical channels)')
+            parts.append(f'correlation r={corr:+.3f}: near +1 means similar signals, near 0 means different content, and a strongly negative value can mean opposing polarity')
         if isinstance(delay,(float,int)):
-            parts.append(f'channel offset {delay:+.3f} ms')
+            parts.append(f'best-fit left/right timing difference {delay:+.3f} ms (under 0.2 ms is very small; channel differences in a stereo mix can affect this estimate)')
         measured=(' Measured: '+', '.join(parts)+'.') if parts else ''
         if fmt=='Mono':
             return ('This file stores one sound channel. There is no left-versus-right phase to compare.'
@@ -349,28 +374,44 @@ def why(key, item):
         else:
             consequence='Different instruments and effects in each channel naturally reduce correlation; that alone is not a phase fault.'
         return ('The two stored channels are different enough to count as stereo. '+consequence+measured+
-                ' Phase clues describe the transfer or mix, not necessarily the equipment used for the original performance.')
+                ' These measurements describe the file and may result from mixing, microphone placement, processing or tape transfer; they do not identify a particular medium.')
 
     if key == 'Likely audio source':
-        guess=str(item.get('result') or 'Unknown')
         evidence=item.get('evidence') if isinstance(item.get('evidence'),list) else []
         context=item.get('context') if isinstance(item.get('context'),list) else []
-        clue=' '.join(str(x).rstrip('.')+'.' for x in evidence[:4] if x)
-        scores=(m.get('clue_scores') or {}) if isinstance(m.get('clue_scores'),dict) else {}
-        ordered=sorted(((str(k),v) for k,v in scores.items() if isinstance(v,(int,float))),
-                       key=lambda kv:-kv[1])
-        points=' Evidence scores: '+', '.join(f'{k} {v:.1f}' for k,v in ordered[:3])+'.' if ordered else ''
+        percent=item.get('guess_percent')
+        best=str(m.get('source_rank') or item.get('result') or 'Unclear')
+        intro=(f'The strongest combined clues favour {best}. '
+               if not item.get('fallback_guess') else
+               'No dependable analog or broadcast fingerprint was found, so digital is a weak fallback rather than a confirmed origin. ')
+        reasons=' '.join(str(x).rstrip('.')+'.' for x in evidence[:5])
         freq=item.get('frequency_clue') if isinstance(item.get('frequency_clue'),dict) else {}
-        freq_note= (' Measured frequency range: '+str(freq.get('result'))+'. '
-                    +str(freq.get('detail') or '')[:270] if freq and
-                    freq.get('certainty') not in ('Not measurable','Unclear') else '')
-        if item.get('fallback_guess'):
-            intro=('This is only the closest remaining guess: the file has no convincing record, tape or FM fingerprint. '
-                   'A clean digitization of an old recording can look digital too. ')
+        fm=freq.get('metrics') if isinstance(freq.get('metrics'),dict) else {}
+        cutoff=fm.get('estimated_cutoff_khz')
+        sharp=fm.get('sharp_sections') or 0
+        tested=fm.get('tested_sections') or 0
+        nyquist=fm.get('nyquist_khz')
+        if isinstance(cutoff,(float,int)):
+            ctext=f' Measured upper-frequency reach: approximately {cutoff:.1f} kHz'
+            if sharp:
+                ctext+=f'; a sharp high-frequency decline appeared in {sharp}/{tested} sampled sections'
+            if isinstance(nyquist,(int,float)) and cutoff >= nyquist-1.3:
+                ctext+=f'. The {nyquist:.1f} kHz file Nyquist limit may explain this ceiling, not the original source'
+            elif 13.5<=cutoff<=16.5:
+                ctext+='. This is compatible with FM audio filtering around 15 kHz, but some MP3 encoding and later processing create similar limits'
+            else:
+                ctext+='. That number alone does not identify the medium'
+            ctext+='.'
         else:
-            intro=(f'{guess} fits the strongest measured recording-path clues. ')
-        return (intro+clue+freq_note+points+(' '+str(context[0]) if context else '')+
-            ' The score compares clues and is not a probability of the original studio format.')
+            ctext=(' Frequency-range result: '+str(freq.get('result'))+'. '+str(freq.get('detail') or '')[:220] if freq.get('result') and freq.get('certainty') not in ('Unclear','Not measurable') else ' The file did not provide a trustworthy high-frequency cutoff measurement.')
+        confidence=(f'Estimated evidence confidence: {percent}% (heuristic, NOT a measured probability). '
+                    if isinstance(percent,int) else '')
+        runner=str(item.get('alternative') or '')
+        score=f' The next strongest candidate was {runner}.' if runner else ''
+        caveat=(' A narrow 10 kHz broadcast dip is not specific to FM or NDR. '
+                'A TV scan tone might reflect interference from a screen during copying, rather than a TV broadcast. '
+                'A song can pass through several media before arriving as an MP3 or FLAC.')
+        return intro+confidence+reasons+ctext+score+(' '+str(context[0]) if context else '')+caveat
 
     if key == 'Vinyl rotation':
         count = m.get('click_events')
@@ -494,12 +535,14 @@ def card(label, item, key=None, evidence_plots=None):
     result = display_result(key, item)
     pill = {'strong':'Clear finding', 'good':'Possible', 'maybe':'Tentative', 'none':'Not confirmed'}[cls]
     if evidence_plots:
-        cls += ' has-spectrogram'
+        cls += ' has-spectrogram'  # semantic marker; does NOT force a full-width card
+    if key == 'Likely audio source':
+        cls += ' ac-feature'
 
     # Options are evidence labels, not interactive buttons. Highlight exactly
     # one conclusion, including an explicit neutral/no-measurement outcome.
     available = {
-        'Likely audio source': ['Vinyl','Cassette','FM','AM','Digital','Unclear'],
+        'Likely audio source': ['Vinyl','Cassette','FM','AM','TV / video','Digital','Unclear'],
         'Vinyl rotation': ['33⅓ RPM','45 RPM','78 RPM','No pattern'],
         'Likely power system': ['50 Hz','60 Hz','Unclear'],
         'Radio / TV signals': ['NTSC','PAL/SECAM','No signal','Unclear'],
@@ -516,7 +559,7 @@ def card(label, item, key=None, evidence_plots=None):
     choice = None
     if key == 'Likely audio source':
         choice = next((v for v,w in [('Vinyl','vinyl'),('Cassette','cassette'),('FM','fm radio'),
-                                   ('AM','am radio'),('Digital','digital')] if w in raw), 'Unclear')
+                                   ('AM','am radio'),('TV / video','tv / video'),('Digital','digital')] if w in raw), 'Unclear')
     elif key == 'Vinyl rotation':
         choice = next((v for v,w in [('33⅓ RPM','33⅓'),('45 RPM','45'),('78 RPM','78')] if w in raw), 'No pattern')
     elif key == 'Likely power system':
@@ -585,7 +628,7 @@ def card(label, item, key=None, evidence_plots=None):
         add_metric('Speed vs reference',m.get('speed_error_percent'),'{:+.2f}%')
         add_metric('Conditional correction',m.get('correction_percent'),'{:+.2f}%')
     elif key == 'Likely audio source':
-        add_metric('Evidence score',m.get('leading_score'),'{:.1f} points')
+        add_metric('Evidence confidence', item.get('guess_percent'), '{}% (estimate)')
         add_metric('Independent clues',m.get('independent_supports'))
     elif key == 'Embedded metadata':
         add_metric('Text fields',len(item.get('tags') or []))
@@ -603,6 +646,14 @@ def card(label, item, key=None, evidence_plots=None):
     quick_html = ('<div class="ac-quick">' + ''.join(
         '<div class="ac-quick-one"><span>'+html.escape(str(k))+'</span><strong>'+
         html.escape(str(v))+'</strong></div>' for k,v in short[:3])+'</div>') if short else ''
+    origin_summary=''
+    if key=='Likely audio source':
+        supports=[str(s).strip().rstrip('.') for s in (item.get('evidence') or []) if str(s).strip()]
+        if supports:
+            origin_summary=('<div class="ac-origin-summary"><strong>Why this ranks first:</strong> '
+                +html.escape('; '.join(supports[:3]))+'.</div>')
+        else:
+            origin_summary='<div class="ac-origin-summary">No unique source fingerprint was confirmed. This is a low-confidence best guess.</div>'
     detail_html = '<p>'+html.escape(why(key,item))+'</p>'
     # Expert measurements are shown inside the SAME Why disclosure, below
     # the plain-language explanation. Never turn them into another tab.
@@ -628,7 +679,7 @@ def card(label, item, key=None, evidence_plots=None):
                         '<div class="ac-tag-fields">'+''.join(tagrows)+'</div>')
     if key=='Likely audio source' and isinstance(m.get('clue_scores'),dict):
         info=sorted(m['clue_scores'].items(),key=lambda t:-t[1])
-        detail_html += '<div class="ac-source-scores">Relative clue scores (not probabilities): '+html.escape(
+        detail_html += '<div class="ac-source-scores">Underlying weighted clue scores (not probabilities): '+html.escape(
             ' · '.join(f'{name} {val:.1f}' for name,val in info))+'</div>'
     if evidence_plots:
         for entry in evidence_plots[:2]:
@@ -651,6 +702,7 @@ def card(label, item, key=None, evidence_plots=None):
             f'{options_html}'
             f'<div class="ac-result">{html.escape(result)}</div>'
             f'{quick_html}'
+            f'{origin_summary}'
             f'<details><summary>Why?</summary>{detail_html}</details>'
             '</section>')
 
@@ -834,7 +886,7 @@ if report:
     report_version = str(meta.get("analyzer_version") or "unknown / earlier version")
     st.markdown(f'<div class="ac-analysis-build">Analyzed with engine: {html.escape(report_version)} · Current engine: {html.escape(ANALYZER_VERSION)}</div>', unsafe_allow_html=True)
     if report_version != ANALYZER_VERSION:
-        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.5.0 deployment completes.')
+        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.6.0 deployment completes.')
     results = sorted_findings(report.get("rows", []))
     plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(

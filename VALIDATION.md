@@ -1,27 +1,28 @@
-# AudioCheQ v2.5.0 — Local validation
+# AudioCheQ v2.6.0 verification
 
-## Changes verified
+## Regressions
 
-- Startup loads `audiocheq_engine_v250.py` from the same directory as `app.py`. Both expose `ANALYZER_VERSION = "2.5.0"`.
-- Main path creates 17 internal detector results and displays 13 cards, including **one** combined Stereo/Mono/Phase card. Every visible card has exactly one “Why?” disclosure and one selected outcome.
-- `origin_fusion.py` ranks a confirmed 19 kHz FM pilot as strong FM evidence, a strong vinyl-crackle + click pattern as likely vinyl, and a 10 kHz notch *alone* as only possible FM-path evidence. Electrical-hum and TV-line clues do not falsely establish FM.
-- Mixed-type metadata and unexpected tag objects do not stop the measured-descriptions stage. Text in the metadata card is HTML-escaped.
-- Evidence figures render using unfilled orange rectangles, not horizontal/vertical reference lines through measurements.
-- Static HTML is checked at 412px and 1100px with Chromium; no horizontal overflow. Real audio preview generated for NDR example.
+- 61 audio-analysis tests passed.
+- 48 file-format, metadata, RDS, chart and new-feature tests passed.
+- 51 UI, upload-flow, startup, display-safety and ranking tests passed.
+- Total: 160 passing tests, run in three groups.
+- A versioned engine import test confirms app.py binds to audiocheq_engine_v260.py, not an older `analyzer.py`.
 
-## Real recording checks (local only)
+## Supplied recording checks (local, not on Streamlit Cloud)
 
-The tests below were run against four privately supplied or previously available recordings; those audio files are deliberately excluded from the distribution archives.
+| Recording | NDR 10 kHz feature | Top path | Heuristic confidence | Cutoff measurement |
+|---|---|---|---:|---:|
+| TMS from Compilation A.mp3 | Detected around 10,298 Hz | FM-related | 71% | 16.0 kHz |
+| N01-21-11-01_tape-2_TMS.mp3 | Detected around 9,931 Hz | FM-related | 71% | 16.0 kHz |
+| Everyone_Knows_That.mp3.mpeg | Full 10 kHz region unavailable | Possible TV/video-related | 60% | 16.0 kHz |
+| Historical Hysterics Rag MP3 | No confirmed NDR dip | Vinyl | 79% | 18.2 kHz |
 
-| Recording | NDR notch | Source estimate | Optional errors |
-| --- | --- | --- | --- |
-| TMS from Compilation A.mp3 | Detected, ~10,298 Hz | Possible FM broadcast path | None |
-| N01-21-11-01_tape-2_TMS.mp3 | Detected, ~9,931 Hz | Possible FM broadcast path | None |
-| Everyone_Knows_That.mp3.mpeg | High-frequency range inadequate for a two-sided notch | Tentative default digital (not a source claim) | None |
-| Hysterics Rag — Tony Parenti's Ragtimers.mp3 | Not detected | Likely vinyl/record | None |
+All four recordings completed without an optional-check TypeError. The two NDR recordings generated **real** hum, cutoff and notch spectrogram PNGs alongside the earlier peak plots, each below the inline encoded-graphic size limit. The same files were used to check that charts show the measured feature as an outline and do not paint reference lines through the evidence.
 
-The previously reported extremely large *wow* estimate in Compilation A was rejected as an unreliable reference-tone track rather than counted as plausible wow.
+## Responsive visual checks
 
-## Not verified
+Chrome/Chromium static HTML previews generated from the actual app CSS and result-card renderer: 1440 px desktop, 850 px tablet, 390 px phone. No horizontal overflow was observed. Desktop displayed the source card at full width and subsequent cards in two columns. Tablet and phone were one-column layouts. Note this is a **static browser check**, not a live Streamlit session.
 
-The user's own live GitHub/Streamlit deployment and optional `redsea` decoder build were not accessed or tested. A negative result on any untested upload is not proof of a recording's origin.
+## Known limits
+
+Origin percentages are heuristic and the 10 kHz filter clue is not unique to NDR or FM. Raw-RDS decoder installation and the live Streamlit deployment were not verified in this environment. Tests do not ship the audio sources.
