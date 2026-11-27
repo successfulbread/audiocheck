@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 from io import BytesIO
+from contextlib import contextmanager
+import gc
 from PIL import Image
 import math
 
@@ -114,9 +116,13 @@ def _plot_panel(fig, ax, f, t, db, low, high, guides, title, show_xlabel=True):
 
 
 def _figure_bytes(fig):
-    output = BytesIO()
-    FigureCanvasAgg(fig).print_png(output)
-    return output.getvalue()
+    try:
+        with BytesIO() as output:
+            FigureCanvasAgg(fig).print_png(output)
+            return output.getvalue()
+    finally:
+        fig.clear()
+        fig.set_canvas(None)
 
 
 def render_evidence(audio, kind, start_seconds=0.0, original_rate=44100, target=None):
@@ -436,11 +442,10 @@ def render_tuning_evidence(tuning):
 def _compact_spectrogram_png(fig):
     # Palette compression preserves the plotted measurement and colour ordering
     # while keeping evidence within Streamlit's per-card inline-image budget.
-    image=Image.open(BytesIO(_figure_bytes(fig))).convert('RGB')
-    image=image.quantize(colors=160,dither=Image.Dither.NONE)
-    output=BytesIO()
-    image.save(output,format='PNG',optimize=True)
-    return output.getvalue()
+    with BytesIO(_figure_bytes(fig)) as source, Image.open(source) as original:
+        with original.convert('RGB') as rgb, rgb.quantize(colors=160,dither=Image.Dither.NONE) as image, BytesIO() as output:
+            image.save(output,format='PNG',optimize=True)
+            return output.getvalue()
 
 
 def render_boxed_spectrogram(audio, kind, start_seconds=0.0, original_rate=44100,
@@ -533,6 +538,24 @@ def render_boxed_spectrogram(audio, kind, start_seconds=0.0, original_rate=44100
             'kind':kind,'section_start_s':start_seconds}
 
 
+@contextmanager
+def _section_audio(section):
+    # Existing direct callers may provide in-memory arrays. Production previews
+    # live on disk; only the selected excerpt is loaded for each graph.
+    audio = (np.load(section['audio_path'], allow_pickle=False)
+             if 'audio_path' in section else section['audio'])
+    try:
+        yield audio
+    finally:
+        del audio
+
+
+def _render_section(section, renderer, *args, **kwargs):
+    # Keep the array in a short-lived frame even when a renderer raises.
+    with _section_audio(section) as audio:
+        return renderer(audio, *args, **kwargs)
+
+
 def make_evidence_charts(sections, findings, original_rate):
     """Default to spectra showing actual measured peaks, not spectrogram heatmaps.
 
@@ -562,9 +585,10 @@ def make_evidence_charts(sections, findings, original_rate):
             if kind=='ndr' and ('no ' in outcome.lower() or 'not ' in outcome.lower()):
                 supported=False
             target=(50 if '50 Hz' in outcome else 60) if kind=='mains' else (15625 if kind=='tv' and any(w in outcome for w in ('PAL','SECAM')) and 'NTSC' not in outcome else None)
-            peak=render_peak_evidence(section['audio'],kind,section['start'],original_rate,
-                                      target=target,mark_peak=supported,
-                                      notch_info=section.get('ndr') if kind=='ndr' else None)
+            peak=_render_section(section,render_peak_evidence,kind,section['start'],original_rate,
+                                 target=target,mark_peak=supported,
+                                 notch_info=section.get('ndr') if kind=='ndr' else None)
+            gc.collect()
             blob=base64.b64encode(peak['png']).decode('ascii')
             if len(blob)<=400000:
                 charts.setdefault(key,[]).append({'image_base64':blob,'caption':peak['caption'],
@@ -582,7 +606,11 @@ def make_evidence_charts(sections, findings, original_rate):
             if measure=='tuning' and not evidence.get('metrics',{}).get('bins_cents'):continue
             if measure=='phase' and not evidence.get('metrics'):continue
             try:
-                plot=renderer(section['audio'] if measure=='phase' else evidence)
+                if measure=='phase':
+                    plot=_render_section(section,renderer)
+                else:
+                    plot=renderer(evidence)
+                gc.collect()
                 blob=base64.b64encode(plot['png']).decode('ascii')
                 if len(blob)>400000:continue
                 charts.setdefault(key,[]).append({'image_base64':blob,'caption':plot['caption'],
@@ -618,8 +646,9 @@ def make_evidence_charts(sections, findings, original_rate):
         if kind=='ndr' and original_rate<22500:continue
         try:
             selected=max(sections,key=lambda x:_window_score(x,'ndr' if kind=='ndr' else 'mains',None))
-            figure=render_boxed_spectrogram(selected['audio'],kind,selected['start'],
+            figure=_render_section(selected,render_boxed_spectrogram,kind,selected['start'],
                 original_rate, measured_hz=target,supported=supported,bandwidth=bw)
+            gc.collect()
             blob=base64.b64encode(figure['png']).decode('ascii')
             if len(blob)<=400000:
                 charts.setdefault(key,[]).insert(0,{'image_base64':blob,

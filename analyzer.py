@@ -24,7 +24,7 @@ from origin_fusion import score_origin
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
 
-ANALYZER_VERSION = "2.7.0"
+ANALYZER_VERSION = "2.7.1"
 NOTCH_DETECTOR_VERSION = "2.7-stricter-two-shoulders"
 LOGGER = logging.getLogger("audiocheq.analyzer")
 
@@ -1318,6 +1318,11 @@ def _diagnostics(windows):
 
 def analyze_path(path, file_name=None, *, charts=False):
     """Read selected portions of a 4--300 second file, return (rows, metadata)."""
+    with tempfile.TemporaryDirectory(prefix="audiocheq_previews_") as plot_dir:
+        return _analyze_path(path, file_name, charts=charts, plot_dir=Path(plot_dir))
+
+
+def _analyze_path(path, file_name=None, *, charts=False, plot_dir):
     path = Path(path)
     if path.suffix.lower() not in EXTENSIONS:
         raise ValueError("Upload MP3, MPEG audio, WAV, FLAC, OGG or M4A audio.")
@@ -1352,6 +1357,7 @@ def analyze_path(path, file_name=None, *, charts=False):
     for start, seconds in _windows(metadata["duration"]):
         audio = _decode_window(path, start, seconds)
         if np.sqrt(float(np.mean(audio * audio))) < 1e-6:
+            del audio
             continue
         mains, air, cutoff = _spectrum_window(audio, metadata["input_rate"])
         a, b = audio[::60].T
@@ -1389,8 +1395,10 @@ def analyze_path(path, file_name=None, *, charts=False):
             # display evidence from its own window, not an unrelated excerpt.
             preview_len = min(len(audio), SAMPLE_RATE * 18)
             offset = max(0, (len(audio) - preview_len) // 2)
+            preview_path = plot_dir / f"preview_{len(plot_sections)}.npy"
+            np.save(preview_path, audio[offset:offset + preview_len], allow_pickle=False)
             plot_sections.append({
-                "audio": audio[offset:offset + preview_len].copy(),
+                "audio_path": preview_path,
                 "start": start + offset / SAMPLE_RATE,
                 "mains": mains, "broadcast": air,
                 "ndr": analyzed[-1]["ndr"],
@@ -1398,7 +1406,7 @@ def analyze_path(path, file_name=None, *, charts=False):
             })
         analyzed_seconds += len(audio)/SAMPLE_RATE
         analyzed_intervals.append((start, len(audio)/SAMPLE_RATE))
-        del audio # Avoid keeping 100+ MB of decoded audio in RAM.
+        del a, b, audio # Drop strided views as well as the backing decoded array.
     if not analyzed:
         raise ValueError("The audio was silent or too faint to analyze.")
     rotation = _consolidate_vinyl(analyzed)
@@ -1454,6 +1462,8 @@ def analyze_path(path, file_name=None, *, charts=False):
             from spectrograms import make_evidence_charts
             return make_evidence_charts(plot_sections, rows, metadata["input_rate"])
         metadata["spectrograms"] = guarded("evidence graphs", build_charts,{})
+        if any(issue.startswith("evidence graphs:") for issue in optional_issues):
+            metadata["graph_warning"] = "Some evidence graphs could not be drawn. Measurements are still available."
         plot_sections.clear()  # Do not preserve decoded audio beyond this call.
     metadata["nonfatal_issues"] = optional_issues
     metadata["analyzer_version"] = ANALYZER_VERSION
