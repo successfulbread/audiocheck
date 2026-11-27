@@ -1,47 +1,27 @@
-# AudioCheQ v2.4.1 validation
+# AudioCheQ v2.5.0 — Local validation
 
-- Added explicit Streamlit startup guard for missing or mismatched analyzer exports.
-- Engine version and app version both 2.4.1; unchanged NDR detection compared with v2.4.
-- **139 automated tests passed in three groups:** 36 startup/UI/upload; 78 core regressions; 25 additional DSP/metadata/RDS.
-- Verified `from analyzer import MAX_BYTES, ANALYZER_VERSION, analyze, analyze_path` with installed dependencies.
-- Full live Streamlit deployment has **not** been tested; the Streamlit package is unavailable in the test container.
-- Verify upload and Archive.org flow using the production Streamlit instance.
+## Changes verified
 
-# AudioCheQ v2.4 — validation
+- Startup loads `audiocheq_engine_v250.py` from the same directory as `app.py`. Both expose `ANALYZER_VERSION = "2.5.0"`.
+- Main path creates 17 internal detector results and displays 13 cards, including **one** combined Stereo/Mono/Phase card. Every visible card has exactly one “Why?” disclosure and one selected outcome.
+- `origin_fusion.py` ranks a confirmed 19 kHz FM pilot as strong FM evidence, a strong vinyl-crackle + click pattern as likely vinyl, and a 10 kHz notch *alone* as only possible FM-path evidence. Electrical-hum and TV-line clues do not falsely establish FM.
+- Mixed-type metadata and unexpected tag objects do not stop the measured-descriptions stage. Text in the metadata card is HTML-escaped.
+- Evidence figures render using unfilled orange rectangles, not horizontal/vertical reference lines through measurements.
+- Static HTML is checked at 412px and 1100px with Chromium; no horizontal overflow. Real audio preview generated for NDR example.
 
-## Real user-supplied recordings (not included with the distributable code)
+## Real recording checks (local only)
 
-The exact submitted MP3s were reopened and analyzed through v2.4 `analyze_path()`:
+The tests below were run against four privately supplied or previously available recordings; those audio files are deliberately excluded from the distribution archives.
 
-| File | Finding | Typical centre | Strongest depth | Positive sections |
-|---|---|---:|---:|---:|
-| TMS from Compilation A.mp3 | Detected, High certainty in the notch itself | 10,298.25 Hz | 3.76 dB | 3/3 |
-| N01-21-11-01_tape-2_TMS.mp3 | Detected, High certainty in the notch itself | 9,930.84 Hz | 4.58 dB | 4/4 |
-| Everyone_Knows_That.mp3.mpeg | No measurable 10 kHz notch region | n/a | n/a | 0 |
-| Tony Parenti's Ragtimers MP3 | No confirmed notch | n/a | n/a | 0 |
+| Recording | NDR notch | Source estimate | Optional errors |
+| --- | --- | --- | --- |
+| TMS from Compilation A.mp3 | Detected, ~10,298 Hz | Possible FM broadcast path | None |
+| N01-21-11-01_tape-2_TMS.mp3 | Detected, ~9,931 Hz | Possible FM broadcast path | None |
+| Everyone_Knows_That.mp3.mpeg | High-frequency range inadequate for a two-sided notch | Tentative default digital (not a source claim) | None |
+| Hysterics Rag — Tony Parenti's Ragtimers.mp3 | Not detected | Likely vinyl/record | None |
 
-For the N01 sample, the full evidence-chart path returned an NDR peak plot and a phase estimate with median interchannel delay approximately +0.181 ms. These measurements describe the **digital files as provided**, not proven recording provenance.
+The previously reported extremely large *wow* estimate in Compilation A was rejected as an unreliable reference-tone track rather than counted as plausible wow.
 
-## UI verification
+## Not verified
 
-- The v2.4 static preview uses actual results from the Compilation A MP3.
-- Chrome/Chromium rendering at 390 px and 1,120 px shows all 14 cards without horizontal overflow.
-- Every result card has a single 'Why?' disclosure, one highlighted possible outcome, and muted alternatives.
-- The file-source and NDR cards appear first in the report; NDR includes observed notch frequency, depth and sampled-section count.
-- Phase and Stereo/Mono appear as separate cards. Phase displays median correlation and delay in the main card; its plot is labelled as an example excerpt, which may not equal the median across the full sampled sections.
-- The visible release badge is `v2.4`; the report identifies its analysis engine as `2.4.0` and warns about a stale report.
-
-## Regression checks
-
-**134 tests passed**, executed in three groups because a single combined run exceeded the environment's time limit:
-
-- Group A: **59 passed** (core analyzer, metadata history, RDS bootstrap, source scoring and UI defensive checks)
-- Group B: **31 passed** (upload clearing, source frequency display, broadcast, NDR and chart tests)
-- Group C: **44 passed** (prior and new UI, phase, speed, metadata/RDS and v2.4 outcome card tests)
-
-## Caveats
-
-- This is a code/runtime test with real local audio plus a **static HTML visual QA**, not a live hosted Streamlit deployment test.
-- The high certainty displayed for a repeatable notch refers to the **spectral notch**, not to station identity. NDR/ARD broadcast fingerprints are not unique.
-- If the user still sees 'Not detected' for either supplied file on Streamlit, first verify the visible build and engine labels. The hosted deployment or saved report may be stale or using a different file/version; the expanded file details include the raw screening measurements.
-- The optional `redsea` decoder may require build dependencies and is not guaranteed to compile on every Streamlit Cloud image.
+The user's own live GitHub/Streamlit deployment and optional `redsea` decoder build were not accessed or tested. A negative result on any untested upload is not proof of a recording's origin.

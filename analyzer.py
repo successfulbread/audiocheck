@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 import subprocess
 import tempfile
+import logging
 
 import numpy as np
 from scipy import ndimage, signal
@@ -19,11 +20,13 @@ from file_history import inspect_file
 from metadata_inspector import inspect_metadata
 from rds_inspector import inspect_rds
 from observations import enrich_findings
+from origin_fusion import score_origin
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
 
-ANALYZER_VERSION = "2.4.1"
+ANALYZER_VERSION = "2.5.0"
 NOTCH_DETECTOR_VERSION = "2.4-broad-shoulder"
+LOGGER = logging.getLogger("audiocheq.analyzer")
 
 MAX_SECONDS = 300.0
 MIN_SECONDS = 4.0
@@ -834,6 +837,24 @@ def _consolidate_wow(windows):
     if not measured:
         return verdict('No trackable reference','Not measurable',
             'No sufficiently prominent, persistent hum, FM pilot or TV-scanning tone could be phase-tracked. Musical vibrato cannot safely substitute for a stable transport reference.')
+    # An apparent change of multiple semitones in a nominal electrical/TV
+    # reference generally indicates an incorrect tone lock or musical masking,
+    # not measurable gentle wow. Do not promote it to a mechanical finding.
+    plausible=[w for w in measured if 0 <= float(w.get('rms_cents',999)) <= 35.0
+               and 0 <= float(w.get('modulation_amplitude_cents',999)) <= 60.0]
+    if not plausible:
+        best=min(measured,key=lambda w:float(w.get('rms_cents',999)))
+        rms=float(best.get('rms_cents',0))
+        return {'result':'Reference pitch track unreliable',
+                'certainty':'Not measurable',
+                'detail':(f'A candidate reference tone varied by {rms:.1f} cents RMS '
+                          'and could not be followed reliably. Such a large deviation may '
+                          'mean the tracker followed musical sound or the wrong harmonic; '
+                          'it is not accepted as evidence of tape/record speed wobble.'),
+                'metrics':{'rejected_rms_cents':round(rms,2),
+                           'candidate_tone_hz':best.get('tone_hz'),
+                           'sampled_sections':len(measured)}}
+    measured=plausible
     periodic=[w for w in measured if w['result'] in ('Periodic wow','Possible flutter')]
     if periodic:
         best=max(periodic,key=lambda w:w['prominence_db'])
@@ -1201,9 +1222,27 @@ def analyze_path(path, file_name=None, *, charts=False):
     if path.stat().st_size > MAX_BYTES:
         raise ValueError("Maximum file size is 100 MB.")
     metadata = _probe(path)
-    metadata["file_history"] = inspect_file(path, metadata)
-    metadata["embedded_metadata"] = inspect_metadata(path, metadata)
-    metadata["rds"] = inspect_rds(path, metadata, metadata["embedded_metadata"])
+    optional_issues = []
+
+    def guarded(stage, operation, fallback):
+        try:
+            return operation()
+        except Exception as exc:
+            LOGGER.exception("Optional audio check failed: %s", stage)
+            optional_issues.append(f"{stage}: {type(exc).__name__}")
+            return fallback
+
+    metadata["file_history"] = guarded(
+        "digital file history", lambda: inspect_file(path, metadata),
+        {**verdict("History unavailable", "Not measurable", "File-history parsing failed."), "facts":{}})
+    metadata["embedded_metadata"] = guarded(
+        "metadata tags", lambda: inspect_metadata(path, metadata),
+        {"result":"Tags unavailable", "certainty":"Not measurable", "tags":[],
+         "detail":"The file's metadata fields could not be read."})
+    metadata["rds"] = guarded(
+        "RDS inspection", lambda: inspect_rds(path, metadata, metadata["embedded_metadata"]),
+        {"result":"RDS inspection unavailable", "certainty":"Not measurable", "metrics":{},
+         "detail":"RDS inspection was unavailable for this recording."})
     analyzed = []
     plot_sections = [] if charts else None
     analyzed_seconds = 0.0
@@ -1217,24 +1256,30 @@ def analyze_path(path, file_name=None, *, charts=False):
         stereo_corr = (float(np.corrcoef(a,b)[0,1])
                        if np.std(a) > 1e-6 and np.std(b) > 1e-6 else None)
         fm = air.get("FM stereo pilot")
-        pilot_jitter = (_pilot_variation_hz(audio)
+        pilot_jitter = (guarded("pilot stability", lambda: _pilot_variation_hz(audio),None)
                         if fm and fm["pass"] and fm.get("persistent") else None)
-        phase = stereo_phase(audio, metadata['channels'])
-        tuning = pitch_tuning(audio)
+        phase = guarded("phase", lambda: stereo_phase(audio, metadata['channels']), None)
+        tuning = guarded("musical tuning", lambda: pitch_tuning(audio), {})
         preview = {'mains':mains,'broadcast':air}
-        refs = reference_candidates([preview])
+        refs = guarded("reference frequencies", lambda: reference_candidates([preview]), [])
         refs.sort(key=lambda r:(r['reference_grade'],r['prominence_db']),reverse=True)
-        wobble = (track_reference_tone(audio,refs[0]['observed'],
-                                       refs[0]['nominal'],refs[0]['prominence_db'])
+        wobble = (guarded("wow/flutter", lambda: track_reference_tone(
+                      audio,refs[0]['observed'],refs[0]['nominal'],refs[0]['prominence_db']), None)
                   if refs else None)
-        analyzed.append({"vinyl":_vinyl_window(audio), "surface":_surface_noise_window(audio), "mains":mains,
-                         "broadcast":air, "cutoff":cutoff,
-                         "bandwidth_feature": _bandwidth_window(audio, metadata["input_rate"]),
-                         "dropouts":_dropout_candidates(audio),
-                         "clipped":float(np.mean(np.abs(audio) >= .998)),
-                         "pilot_jitter":pilot_jitter, "stereo_corr":stereo_corr,
-                         "phase":phase,"tuning":tuning,"wow":wobble,
-                         "ndr":_ndr_notch_window(audio, metadata["input_rate"])})
+        analyzed.append({
+            "vinyl": guarded("vinyl rotation",lambda: _vinyl_window(audio),None),
+            "surface":guarded("surface noise",lambda: _surface_noise_window(audio),
+                {"quiet_frames":0,"crackly_frames":0,"frames":0,"clicks":0,
+                 "quiet_clicks":0,"irregular":False,"high_frequency_ratio":0.0}),
+            "mains":mains,"broadcast":air,"cutoff":cutoff,
+            "bandwidth_feature":guarded("audio bandwidth",lambda: _bandwidth_window(
+                                     audio,metadata["input_rate"]),None),
+            "dropouts":guarded("audio dropouts",lambda: _dropout_candidates(audio),0),
+            "clipped":float(np.mean(np.abs(audio) >= .998)),
+            "pilot_jitter":pilot_jitter,"stereo_corr":stereo_corr,
+            "phase":phase,"tuning":tuning,"wow":wobble,
+            "ndr":guarded("10 kHz notch",lambda: _ndr_notch_window(
+                    audio,metadata["input_rate"]),None)})
         if charts:
             # Bounded real excerpts; retained temporarily only until plots render.
             # Use a centred part of each sampled section so every chosen clue can
@@ -1272,7 +1317,11 @@ def analyze_path(path, file_name=None, *, charts=False):
                if interruption_count else verdict('None found', 'Not detected', 'No brief interruptions.'))
     bandwidth = _bandwidth_verdict(analyzed, metadata, broadcast)
     stereo = _stereo_format(analyzed, metadata['channels'])
-    source = _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, metadata, stereo)
+    source = score_origin(rotation=rotation, surface=surface, broadcast=broadcast,
+                         pilot=pilot, ndr=ndr, dropout=dropout, bandwidth=bandwidth,
+                         metadata=metadata, stereo=stereo, phase=phase_summary,
+                         wow=wow_summary, power=electrical, speed=speed,
+                         rds=metadata["rds"])
     # The frequency response supports the source guess, not an independent origin.
     source["frequency_clue"] = bandwidth
     rows=[
@@ -1294,11 +1343,14 @@ def analyze_path(path, file_name=None, *, charts=False):
         ('RDS / RadioText',metadata['rds']),
         ('Stereo format',stereo),
     ]
-    enrich_findings(rows, analyzed, metadata, analyzed_intervals)
+    guarded("measured descriptions",lambda: enrich_findings(rows, analyzed, metadata, analyzed_intervals),None)
     if charts:
-        from spectrograms import make_evidence_charts
-        metadata["spectrograms"] = make_evidence_charts(plot_sections, rows, metadata["input_rate"])
+        def build_charts():
+            from spectrograms import make_evidence_charts
+            return make_evidence_charts(plot_sections, rows, metadata["input_rate"])
+        metadata["spectrograms"] = guarded("evidence graphs", build_charts,{})
         plot_sections.clear()  # Do not preserve decoded audio beyond this call.
+    metadata["nonfatal_issues"] = optional_issues
     metadata["analyzer_version"] = ANALYZER_VERSION
     metadata["notch_detector_version"] = NOTCH_DETECTOR_VERSION
     metadata["ndr_screening"] = [

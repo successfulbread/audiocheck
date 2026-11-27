@@ -13,6 +13,7 @@ import math
 import numpy as np
 from scipy import signal, ndimage
 from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 AUDIO_RATE = 44100
@@ -258,6 +259,7 @@ def render_peak_evidence(audio, kind, start_seconds=0.0, original_rate=44100,
     fig=Figure(figsize=(8.7,3.8 if rows==1 else 5.7),dpi=112,facecolor=PAPER)
     axes=fig.subplots(rows,1)
     if rows==1: axes=[axes]
+    boxed=[]
     for ax,(lo,hi,title,guides) in zip(axes,ranges):
         mask=(freq>=lo)&(freq<=hi)
         ff=freq[mask]; vv=db[mask]
@@ -286,40 +288,67 @@ def render_peak_evidence(audio, kind, start_seconds=0.0, original_rate=44100,
         for txt,hz in zip(ax.get_xticklabels(),ticks):
             if any(abs(hz-r)<.001 for r,_ in guides):
                 txt.set_color('#007C88');txt.set_fontweight('bold')
-        # Identify the actual measured extreme without drawing an indicator
-        # across the trace. A spike in noise is not automatically a detection.
-        if kind=='ndr':
-            measured=(notch_info or {}).get('freq')
-            if mark_peak and isinstance(measured,(int,float)) and lo <= measured <= hi:
-                yval=float(np.interp(measured,ff,vv))
-                ax.scatter([measured],[yval],s=34,c='#ED8A20',
-                           edgecolors='white',linewidth=.8,zorder=5)
-                # Label with the caption rather than covering the spectrum.
-        elif mark_peak:
-            target_i=int(np.argmax(vv))
-            hz=float(ff[target_i]); amp=float(vv[target_i])
-            ax.scatter([hz],[amp],s=23,c='#ED8A20',zorder=3)
-            ax.annotate(f'Highest bin: {hz:,.1f} Hz',
-                        xy=(hz,amp),xytext=(0,11),textcoords='offset points',
-                        fontsize=8,color='#384960',ha='center',va='bottom')
+        # Outline the actual peak or trough with an UNFILLED rectangle.
+        # No vertical or horizontal guide is drawn across the measured trace.
+        # Only mark peaks when the independent detector supports that signal.
+        if mark_peak:
+            measured = None
+            if kind == 'ndr':
+                measured=(notch_info or {}).get('freq')
+                if isinstance(measured,(int,float)) and lo <= measured <= hi:
+                    amplitude=float(np.interp(measured,ff,vv))
+                    width=max(35., 2.2*float((notch_info or {}).get('width_hz',20) or 20))
+                    height=12.0
+                    ymin=amplitude-3.5
+                else:
+                    measured=None
+            else:
+                # Don't put the frame around an unrelated louder musical peak:
+                # restrict the search to the expected, independently detected
+                # 50/60, 100/120, TV scanning, or FM pilot neighbourhood.
+                if kind=='mains':
+                    desired=(float(selected)*2 if lo>=90 else float(selected))
+                    tolerance=2.5 if lo>=90 else 1.7
+                    width=5.0 if lo>=90 else 3.5
+                elif kind=='tv':
+                    desired=float(selected)
+                    tolerance=35.0
+                    width=28.0
+                else:
+                    desired=19000.0
+                    tolerance=180.0
+                    width=46.0
+                near=np.where(np.abs(ff-desired)<=tolerance)[0]
+                if len(near):
+                    i=int(near[np.argmax(vv[near])])
+                    measured=float(ff[i]);amplitude=float(vv[i])
+                    height=11.0
+                    ymin=amplitude-6.0
+            if isinstance(measured,(int,float)) and np.isfinite(measured):
+                width=float(min(width,hi-lo))
+                left=max(lo,min(float(measured)-width/2,hi-width))
+                ymin=max(bottom+1,min(float(ymin),ceiling-height-1))
+                ax.add_patch(Rectangle((left,ymin),width,height,
+                         fill=False,linewidth=1.75,edgecolor='#DE7B15',
+                         zorder=8,clip_on=True,joinstyle='round'))
+                # The frequency is reported in the caption rather than
+                # printed on top of the measured line.
+                boxed.append((title,float(measured)))
     fig.subplots_adjust(left=.12,right=.96,bottom=.20 if rows==1 else .13,
                         top=.86 if rows==1 else .92,hspace=.53)
     duration=len(audio)/AUDIO_RATE
+    highlights=', '.join(f'{label}: {hz:,.1f} Hz' for label,hz in boxed)
     if kind=='ndr':
-        measured=(notch_info or {}).get('freq')
-        found=bool(mark_peak and isinstance(measured,(int,float)))
-        mark_note=(f'Orange point marks a verified repeated dip near {measured:,.0f} Hz; '
-                   f'roughly {(notch_info or {}).get("depth_db",0):.1f} dB below neighbouring audio. '
-                   if found else 'No supported recurring notch was found in this excerpt. ')
-        mark_note+='Purple curve averages the power at each frequency; lower means quieter. '
+        mark_note=('Amber outline encloses the measured repeated trough; '+highlights+'. '
+                   if boxed else 'No confirmed repeatable notch is outlined in this excerpt. ')
+        mark_note+='Purple curve shows actual average sound energy by frequency; lower means quieter. '
     else:
-        mark_note=('Orange point marks the strongest measured bin; this alone does not prove a source. '
-                   if mark_peak else 'No peak highlighted: detector did not confirm a signal. ')
-    caption=(f'Real audio, measured from {start_seconds:.0f}–{start_seconds+duration:.0f} s ({channel}). '
-             + mark_note +
-             ('The 10,000 Hz tick is only a reference point; the actual dip can move with tape speed.'
-              if kind=='ndr' else
-              'Frequency ticks show standard reference values, not detected signals.'))
+        mark_note=('Amber outline encloses the detector-supported measured peak(s): '+highlights+'. '
+                   if boxed else 'No frequency was highlighted because the detector did not confirm a peak. ')
+    caption=(f'Real audio measured at {start_seconds:.0f}–{start_seconds+duration:.0f} s ({channel}). '
+             +mark_note+
+             ('The 10,000 Hz tick is a reference only; analog playback speed can shift the actual dip.'
+              if kind=='ndr' else 'Reference ticks below the curve are expected frequencies, not detections.'))
     return {'png':_figure_bytes(fig),'caption':caption,'kind':kind,
             'channel':channel,'section_start_s':start_seconds}
 

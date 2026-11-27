@@ -1,4 +1,4 @@
-"""AudioCheQ v2.4.3 - guarded analysis and actionable upload errors."""
+"""AudioCheQ v2.5.0 - integrated source evidence and readable forensic findings."""
 from __future__ import annotations
 
 import html
@@ -9,28 +9,28 @@ import logging
 
 import streamlit as st
 
-APP_VERSION = "2.4.3"
-st.set_page_config(page_title="AudioCheQ v2.4.3 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
+APP_VERSION = "2.5.0"
+st.set_page_config(page_title="AudioCheQ v2.5.0 | Find the clues", page_icon=":material/graphic_eq:", layout="centered", initial_sidebar_state="collapsed")
 
 # Load this release's uniquely named engine from the SAME directory as app.py.
 # This avoids a stale analyzer.py left in GitHub or an unrelated `analyzer`
 # module elsewhere on the Python import path. There is no fallback to an old
 # analyzer, because it would silently undo the fixed NDR detection.
 import importlib.util
-ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v243.py")
+ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v250.py")
 if not ENGINE_PATH.is_file():
-    st.error("AudioCheQ v2.4.3 is missing its audio engine file.")
-    st.write("Missing: **audiocheq_engine_v243.py** beside **app.py**.")
-    st.info("Upload both files from the v2.4.3 two-file update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
+    st.error("AudioCheQ v2.5.0 is missing its audio engine file.")
+    st.write("Missing: **audiocheq_engine_v250.py** beside **app.py**.")
+    st.info("Upload both files from the v2.5.0 two-file update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
     st.stop()
 try:
-    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v243", ENGINE_PATH)
+    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v250", ENGINE_PATH)
     if not _spec or not _spec.loader:
         raise ImportError("Cannot load engine from the local Python file")
     _engine = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_engine)
 except Exception as exc:
-    st.error("AudioCheQ could not load its v2.4.3 audio engine.")
+    st.error("AudioCheQ could not load its v2.5.0 audio engine.")
     st.code(f"{type(exc).__name__}: {exc}", language="text")
     st.write(f"Engine file: `{ENGINE_PATH.name}`")
     st.info("Check that the complete ZIP contents are in the repository root and that Streamlit has finished installing packages.txt and requirements.txt.")
@@ -45,7 +45,7 @@ if _analyzer_loaded != APP_VERSION or _missing_exports:
     if _missing_exports:
         st.write("Missing engine fields: " + ", ".join(_missing_exports))
     st.write(f"Loaded engine file: `{ENGINE_PATH.name}`")
-    st.info("Replace app.py and audiocheq_engine_v243.py together from the v2.4.3 update ZIP, then reboot the app.")
+    st.info("Replace app.py and audiocheq_engine_v250.py together from the v2.5.0 update ZIP, then reboot the app.")
     st.stop()
 
 MAX_BYTES = _engine.MAX_BYTES
@@ -188,6 +188,21 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-analysis-build {color:#B9D5E8;font-size:.78rem;margin:-9px 0 12px;}
 .ac-warning-note {color:#3A160B;background:#FFE3B3;padding:10px 13px;border-radius:12px;margin-bottom:12px;font-size:.87rem;font-weight:650;}
 
+/* Expert measurements remain inside the single Why disclosure. */
+.ac-measure-head {font-weight:850;font-size:.82rem;margin:15px 0 7px;color:#204C72;}
+.ac-card.none .ac-measure-head {color:#A7E8E1;}
+.ac-measure-list {padding-left:20px !important;margin:0 0 10px !important;}
+.ac-measure-list li {font-size:.80rem !important;line-height:1.52 !important;overflow-wrap:anywhere;}
+.ac-tag-fields {max-height:360px;overflow:auto;display:grid;gap:5px;background:#FFFFFF99;
+ border:1px solid #B2CADC;border-radius:12px;padding:9px;}
+.ac-tag-field {display:grid;grid-template-columns:minmax(70px,115px) minmax(0,1fr);gap:4px 8px;
+ padding:6px 5px;border-bottom:1px solid #BFD2E2;font-size:.78rem;overflow-wrap:anywhere;}
+.ac-tag-field strong{color:#20385E}.ac-tag-field span{color:#1C3452}
+.ac-tag-field small{color:#66829D;grid-column:2;}
+.ac-card.none .ac-tag-fields{background:#35445B;border-color:#567087}
+.ac-card.none .ac-tag-field strong,.ac-card.none .ac-tag-field span{color:#EAF2FC}
+.ac-source-scores{font-size:.79rem;line-height:1.5;margin:11px 0;color:#385A75;}
+.ac-card.none .ac-source-scores{color:#DDE9F2;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -204,7 +219,7 @@ st.markdown('''<div class="ac-hero">
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
 <p class="ac-tagline">Find the story hidden in the sound.</p>
-<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.4.3 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.5.0 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -244,8 +259,7 @@ def badge_class(item):
 LABELS = {
     'Likely audio source': ('Most likely origin', '&#9835;'),
     'NDR-style 10 kHz dip': ('10 kHz broadcast-filter dip', '&#9836;'),
-    'Stereo format': ('Stereo / mono', '&#9685;'),
-    'Stereo phase / delay': ('Phase & channel timing', '&#8646;'),
+    'Stereo / phase': ('Stereo, mono & channel alignment', '&#8646;'),
     'Vinyl rotation': ('Record rotation', '&#9673;'),
     'Likely power system': ('Electrical hum', '&#9889;'),
     'Radio / TV signals': ('TV scanning signals', '&#9737;'),
@@ -270,10 +284,8 @@ def display_result(key, item):
         if item.get('certainty') == 'Not measurable':
             return 'Cannot assess 10 kHz'
         return 'No confirmed 10 kHz dip'
-    if key == 'Stereo format':
-        return 'Dual mono (two near-identical channels)' if 'dual mono' in raw.lower() else raw
-    if key == 'Stereo phase / delay' and raw == 'Distinct stereo channels':
-        return 'Distinct stereo channels'
+    if key == 'Stereo / phase':
+        return raw
     if key == 'Vinyl rotation' and not meaningful(item):
         return 'No reliable RPM pattern'
     if key == 'FM stereo pilot' and not meaningful(item):
@@ -305,7 +317,7 @@ def why(key, item):
                     'A fixed dip like this is consistent with a filter used somewhere in an older broadcast or copying chain. '
                     'The centre can shift when tape speed changes. It does not by itself identify NDR as the station.')
         if positive:
-            return 'The detector reports a possible 10 kHz gap, but this saved result has no numeric measurements. Re-upload the recording with v2.4 to obtain a measured centre, depth and consistency check. A filter notch alone cannot identify NDR.'
+            return 'The detector reports a possible 10 kHz gap, but this saved result has no numeric measurements. Re-upload the recording with v2.5 to obtain a measured centre, depth and consistency check. A filter notch alone cannot identify NDR.'
         if center and depth:
             return (f'The strongest candidate was at {center} Hz and {depth} dB below adjacent sound, '
                     'but it was not deep or repeatable enough on both sides to qualify. '
@@ -313,59 +325,52 @@ def why(key, item):
         return ('This file did not provide enough usable upper-frequency sound to assess a narrow notch '
                 'around 10 kHz. A negative result does not prove the original recording lacked that filter.')
 
-    if key == 'Stereo format':
-        r = number('stereo_median_corr', 3)
-        channels = 1 if raw == 'Mono' else 2 if raw in ('Stereo', 'Dual mono / near-mono') else None
-        first = f'The audio file has {channels} channel(s).' if channels else 'The number of independent channels could not be established.'
-        if r:
-            first += f' The measured left/right correlation is r={float(m["stereo_median_corr"]):+.3f}.'
-        if raw == 'Mono':
-            return first + ' This is a mono file, but the original recording might have been stereo before an earlier transfer.'
-        if 'dual mono' in raw.lower():
-            return first + ' The two stored channels carry almost the same sound, as if a mono signal were duplicated. This does not establish the source format.'
-        if raw == 'Stereo':
-            return first + ' The channels contain measurably different content, consistent with stereo. Artificial stereo or transfer processing is also possible.'
-        return first + ' Loudness or missing content can prevent a reliable format comparison.'
-
-    if key == 'Stereo phase / delay':
-        corr = m.get('median_zero_corr', m.get('zero_corr'))
-        delay = m.get('median_delay_ms', m.get('delay_ms'))
-        measured = []
-        if isinstance(corr, (int, float)):
-            measured.append(f'left/right correlation r={corr:+.3f}')
-        if isinstance(delay, (int, float)):
-            measured.append(f'best channel offset {delay:+.3f} ms')
-        opening = ('Measured ' + ' and '.join(measured) + '. ') if measured else ''
-        band = m.get('band_corr') if isinstance(m.get('band_corr'), dict) else {}
-        high = band.get('High')
-        extra = f' In the high-frequency band, correlation is {high:+.3f}.' if isinstance(high, (int, float)) else ''
-        if 'polarity' in raw.lower() or 'opposite-phase' in raw.lower():
-            return opening + 'Some similar sound moves in opposite directions in the channels, which could weaken bass when summed to mono.' + extra + ' Reversed wiring, effects or later transfers can cause this.'
-        if 'delay' in raw.lower():
-            return opening + 'The same sound reaches the two channels at slightly different times. This may come from tape alignment, stereo processing or microphone placement, not necessarily a defective original.' + extra
-        if 'single-channel' in raw.lower():
-            return 'Phase comparison needs two independent channels. A one-channel file has no left/right phase relationship to test.'
-        return opening + 'The channels contain different stereo material, so a correlation below +1 is not necessarily a phase fault.' + extra + ' This cannot establish whether the recording was originally stereo.'
+    if key == 'Stereo / phase':
+        fmt=str(item.get('format_result') or 'Unclear')
+        phase=str(item.get('phase_result') or 'Unclear')
+        corr=m.get('median_zero_corr', m.get('zero_corr', m.get('stereo_median_corr')))
+        delay=m.get('median_delay_ms',m.get('delay_ms'))
+        parts=[]
+        if isinstance(corr,(float,int)):
+            parts.append(f'left/right correlation {corr:+.3f} (1.000 means identical channels)')
+        if isinstance(delay,(float,int)):
+            parts.append(f'channel offset {delay:+.3f} ms')
+        measured=(' Measured: '+', '.join(parts)+'.') if parts else ''
+        if fmt=='Mono':
+            return ('This file stores one sound channel. There is no left-versus-right phase to compare.'
+                    ' It could still be a mono copy of a stereo original.'+measured)
+        if 'dual mono' in fmt.lower():
+            return ('This file stores two channels carrying essentially the same sound. That often means a mono signal'
+                    ' was copied into a stereo file, not that the original recording was mono.'+measured)
+        if 'polarity' in phase.lower() or 'opposite-phase' in phase.lower():
+            consequence='Parts of the shared sound have opposite polarity, which can cancel when the recording is played in mono.'
+        elif 'delay' in phase.lower():
+            consequence='A small offset between channels may reflect a tape-head alignment problem or later stereo processing.'
+        else:
+            consequence='Different instruments and effects in each channel naturally reduce correlation; that alone is not a phase fault.'
+        return ('The two stored channels are different enough to count as stereo. '+consequence+measured+
+                ' Phase clues describe the transfer or mix, not necessarily the equipment used for the original performance.')
 
     if key == 'Likely audio source':
-        evidence = item.get('evidence') or []
-        facts = [str(x) for x in evidence[:3] if x] if isinstance(evidence, list) else []
-        guess = str(item.get('result') or 'Unknown')
-        freq = item.get('frequency_clue') if isinstance(item.get('frequency_clue'),dict) else {}
-        freq_note = ''
-        if freq and freq.get('certainty') not in ('Not measurable','Unclear'):
-            freq_label = str(freq.get('result') or '').strip()
-            freq_reason = str(freq.get('detail') or '').strip()
-            if freq_label:
-                freq_note = ' Measured frequency range: ' + freq_label + '. '
-                if freq_reason:
-                    freq_note += freq_reason[:270] + ' '
-        if facts:
-            return (f'{guess} is the closest match to the audible and measured clues: '
-                    + ' '.join(facts) + freq_note + 'A song may have passed through more than one medium, so this is a best guess, not a verified origin.')
-        return ('No distinctive source evidence stood out. The origin label is a weak best guess; '
-                'the present digital file format does not establish how the song was originally recorded.'
-                + freq_note)
+        guess=str(item.get('result') or 'Unknown')
+        evidence=item.get('evidence') if isinstance(item.get('evidence'),list) else []
+        context=item.get('context') if isinstance(item.get('context'),list) else []
+        clue=' '.join(str(x).rstrip('.')+'.' for x in evidence[:4] if x)
+        scores=(m.get('clue_scores') or {}) if isinstance(m.get('clue_scores'),dict) else {}
+        ordered=sorted(((str(k),v) for k,v in scores.items() if isinstance(v,(int,float))),
+                       key=lambda kv:-kv[1])
+        points=' Evidence scores: '+', '.join(f'{k} {v:.1f}' for k,v in ordered[:3])+'.' if ordered else ''
+        freq=item.get('frequency_clue') if isinstance(item.get('frequency_clue'),dict) else {}
+        freq_note= (' Measured frequency range: '+str(freq.get('result'))+'. '
+                    +str(freq.get('detail') or '')[:270] if freq and
+                    freq.get('certainty') not in ('Not measurable','Unclear') else '')
+        if item.get('fallback_guess'):
+            intro=('This is only the closest remaining guess: the file has no convincing record, tape or FM fingerprint. '
+                   'A clean digitization of an old recording can look digital too. ')
+        else:
+            intro=(f'{guess} fits the strongest measured recording-path clues. ')
+        return (intro+clue+freq_note+points+(' '+str(context[0]) if context else '')+
+            ' The score compares clues and is not a probability of the original studio format.')
 
     if key == 'Vinyl rotation':
         count = m.get('click_events')
@@ -378,9 +383,18 @@ def why(key, item):
         return 'No convincing repeating click sequence matched 33⅓, 45 or 78 RPM. A quiet record transfer may have no usable rotational clicks.'
 
     if key == 'Likely power system':
-        if positive and detail:
-            return detail + ' We compare 50 or 60 Hz hum and 100 or 120 Hz harmonics; these can enter during copying or digitization, so the region is a clue, not proof of the studio country.'
-        return 'Neither a 50 or 60 Hz hum from mains electricity nor matching 100 or 120 Hz harmonics were confirmed. Quiet equipment or filtering can remove these traces; their absence says little about where the music was made.'
+        observed = detail if positive and detail else ('No reliable 50 or 60 Hz pattern was confirmed in this recording.')
+        countries_50=('50 Hz examples: Germany, France, United Kingdom, Ireland, Spain, Italy, Portugal, '
+            'Netherlands, Belgium, Switzerland, Austria, Poland, Sweden, Norway, Finland, Russia, '
+            'Ukraine, China, India, Pakistan, Australia, New Zealand, South Africa, Egypt, '
+            'Argentina, Chile and Vietnam.')
+        countries_60=('60 Hz examples: United States, Canada, Mexico, Brazil, Colombia, Venezuela, Peru, '
+            'Ecuador, Costa Rica, Guatemala, Panama, Dominican Republic, South Korea, Taiwan and the Philippines.')
+        exception=('Japan uses 50 Hz in the east (including Tokyo) and 60 Hz in the west (including Osaka). '
+                   'Some territories or facilities have exceptions. This identifies electrical interference somewhere '
+                   'in the recording or copying chain, not the nationality of the artist.')
+        return (observed+' Electrical hum from mains electricity may occur at 50 or 60 Hz, often with harmonics at 100 or 120 Hz. It may have entered during copying or digitization. '
+                +countries_50+' '+countries_60+' '+exception)
 
     if key == 'Radio / TV signals':
         if positive and detail:
@@ -398,6 +412,12 @@ def why(key, item):
                     + ' This is evidence of an FM-related signal: the 19 kHz pilot helps the tuner reconstruct the 38 kHz stereo subcarrier. Other electronic tones can resemble it.')
         return 'No reliable 19,000 Hz pilot was measured. Most FM tuners deliberately remove the pilot before sending out audio, so this does not rule out an FM recording.'
 
+    if key == 'Wow and flutter' and 'unreliable' in raw.lower():
+        rejected=number('rejected_rms_cents',1)
+        return (f'A possible tone shifted by {rejected} cents RMS, far too much to trust as normal mechanical wow. '
+                if rejected else 'The reference-tone pitch track was unreliable. ')+(
+                'The analyzer rejects this candidate rather than confusing a musical note or wrong harmonic '
+                'with tape speed variation. No usable wow/flutter conclusion can be drawn.')
     if key == 'Wow and flutter':
         rms = number('rms_cents', 2)
         rate = number('rate_hz', 2)
@@ -485,8 +505,7 @@ def card(label, item, key=None, evidence_plots=None):
         'Radio / TV signals': ['NTSC','PAL/SECAM','No signal','Unclear'],
         'FM stereo pilot': ['Detected','Not detected','Unavailable'],
         'NDR-style 10 kHz dip': ['Detected','Not detected','Unavailable'],
-        'Stereo format': ['Mono','Stereo','Dual mono','Unclear'],
-        'Stereo phase / delay': ['Aligned','Reversed','Delayed','Distinct stereo','Unclear'],
+        'Stereo / phase': ['Mono','Dual mono','Stereo','Unclear'],
         'Wow and flutter': ['Detected','No clear wobble','Unmeasurable'],
         'Pitch / musical tuning': ['Near A440','Flat','Sharp','Unclear'],
         'Playback speed': ['Too slow','Too fast','Near normal','Unknown'],
@@ -506,13 +525,8 @@ def card(label, item, key=None, evidence_plots=None):
         choice = 'NTSC' if 'ntsc' in raw else 'PAL/SECAM' if 'pal' in raw or 'secam' in raw else 'Unclear' if 'unavailable' in raw else 'No signal'
     elif key in ('FM stereo pilot', 'NDR-style 10 kHz dip'):
         choice = 'Detected' if positive else 'Unavailable' if item.get('certainty') == 'Not measurable' else 'Not detected'
-    elif key == 'Stereo format':
+    elif key == 'Stereo / phase':
         choice = 'Dual mono' if 'dual mono' in raw else 'Mono' if raw == 'mono' else 'Stereo' if raw == 'stereo' else 'Unclear'
-    elif key == 'Stereo phase / delay':
-        choice = ('Reversed' if 'polarity' in raw or 'opposite-phase' in raw else
-                  'Delayed' if 'channel delay' in raw else
-                  'Aligned' if 'identical channels' in raw else
-                  'Distinct stereo' if 'distinct stereo' in raw else 'Unclear')
     elif key == 'Wow and flutter':
         choice = 'Detected' if positive else 'Unmeasurable' if item.get('certainty') == 'Not measurable' else 'No clear wobble'
     elif key == 'Pitch / musical tuning':
@@ -551,11 +565,9 @@ def card(label, item, key=None, evidence_plots=None):
             if isinstance(repeats,int) and isinstance(total,int) and total:
                 info+=f' · {repeats}/{total} sections'
             add_metric('Dip depth / persistence',info)
-    elif key == 'Stereo format':
-        add_metric('File channels',1 if raw=='mono' else 2 if 'stereo' in raw or 'dual mono' in raw else None)
-        add_metric('L/R correlation',m.get('stereo_median_corr'),'{:+.3f}')
-    elif key == 'Stereo phase / delay':
-        add_metric('L/R correlation',m.get('median_zero_corr',m.get('zero_corr')),'{:+.3f}')
+    elif key == 'Stereo / phase':
+        add_metric('Stored channels',1 if raw=='mono' else 2 if raw in ('stereo','dual mono') else None)
+        add_metric('Channel correlation',m.get('median_zero_corr',m.get('zero_corr',m.get('stereo_median_corr'))),'{:+.3f}')
         add_metric('Channel offset',m.get('median_delay_ms',m.get('delay_ms')),'{:+.3f} ms')
     elif key == 'FM stereo pilot':
         add_metric('Measured peak',m.get('measured_hz'),'{:,.1f} Hz')
@@ -573,10 +585,15 @@ def card(label, item, key=None, evidence_plots=None):
         add_metric('Speed vs reference',m.get('speed_error_percent'),'{:+.2f}%')
         add_metric('Conditional correction',m.get('correction_percent'),'{:+.2f}%')
     elif key == 'Likely audio source':
-        if positive and item.get('guess_percent'):
-            add_metric('Clue score (not probability)',item.get('guess_percent'),'~{:.0f}%')
+        add_metric('Evidence score',m.get('leading_score'),'{:.1f} points')
+        add_metric('Independent clues',m.get('independent_supports'))
     elif key == 'Embedded metadata':
         add_metric('Text fields',len(item.get('tags') or []))
+        for tagname in ('Title','Artist'):
+            entry=next((t for t in (item.get('tags') or []) if isinstance(t,dict)
+                        and str(t.get('field','')).lower()==tagname.lower()),None)
+            if entry is not None:
+                add_metric(tagname,str(entry.get('value',''))[:100])
     elif key == 'RDS / RadioText':
         add_metric('Decoded groups',(m.get('rds_groups') if m else None))
     elif key == 'Digital file history':
@@ -587,13 +604,39 @@ def card(label, item, key=None, evidence_plots=None):
         '<div class="ac-quick-one"><span>'+html.escape(str(k))+'</span><strong>'+
         html.escape(str(v))+'</strong></div>' for k,v in short[:3])+'</div>') if short else ''
     detail_html = '<p>'+html.escape(why(key,item))+'</p>'
+    # Expert measurements are shown inside the SAME Why disclosure, below
+    # the plain-language explanation. Never turn them into another tab.
+    raw_notes=item.get('observations') if isinstance(item.get('observations'),list) else []
+    numeric_notes=[str(x) for x in raw_notes if any(c.isdigit() for c in str(x))]
+    if numeric_notes:
+        limit=8 if key in ('Likely audio source','Likely power system','Stereo / phase') else 6
+        # Show measurements first, not generic protocol boilerplate.
+        detail_html += ('<div class="ac-measure-head">Measured in this recording</div>'
+                        '<ul class="ac-measure-list">'+''.join(
+            '<li>'+html.escape(note[:500])+'</li>' for note in numeric_notes[:limit])+'</ul>')
+    if key=='Embedded metadata' and isinstance(item.get('tags'),list) and item['tags']:
+        tagrows=[]
+        for entry in item['tags'][:90]:
+            if not isinstance(entry,dict):
+                continue
+            field=html.escape(str(entry.get('field','(unlabelled)'))[:105])
+            value=html.escape(str(entry.get('value',''))[:340])
+            source=html.escape(str(entry.get('source',''))[:105])
+            tagrows.append('<div class="ac-tag-field"><strong>'+field+'</strong>'
+                           +'<span>'+value+'</span><small>'+source+'</small></div>')
+        detail_html += ('<div class="ac-measure-head">Embedded text fields</div>'
+                        '<div class="ac-tag-fields">'+''.join(tagrows)+'</div>')
+    if key=='Likely audio source' and isinstance(m.get('clue_scores'),dict):
+        info=sorted(m['clue_scores'].items(),key=lambda t:-t[1])
+        detail_html += '<div class="ac-source-scores">Relative clue scores (not probabilities): '+html.escape(
+            ' · '.join(f'{name} {val:.1f}' for name,val in info))+'</div>'
     if evidence_plots:
         for entry in evidence_plots[:2]:
             img=entry.get('image_base64','')
             if not isinstance(img,str) or not re.fullmatch(r'[A-Za-z0-9+/=]{100,400000}',img):
                 continue
             measured_caption=str(entry.get('caption',''))
-            if key == 'Stereo phase / delay':
+            if key == 'Stereo / phase':
                 measured_caption='Example excerpt (the card values are medians across sampled sections). ' + measured_caption
             elif key == 'NDR-style 10 kHz dip':
                 measured_caption='Strongest excerpt shown; the centre above summarizes all qualifying excerpts. ' + measured_caption
@@ -624,8 +667,40 @@ def summary(found):
     return ' · '.join(statements)
 
 
+def combine_stereo_phase(stereo, phase):
+    """One honest recording-format result with phase as a supporting measurement.
+
+    Stereo correlation is not itself a diagnosis of a faulty phase relationship.
+    Values reflect the sampled FILE, not necessarily an original master tape.
+    """
+    stereo = stereo if isinstance(stereo,dict) else {}
+    phase = phase if isinstance(phase,dict) else {}
+    f = str(stereo.get('result') or 'Unclear')
+    p = str(phase.get('result') or 'Unclear')
+    fm = stereo.get('metrics') if isinstance(stereo.get('metrics'),dict) else {}
+    pm = phase.get('metrics') if isinstance(phase.get('metrics'),dict) else {}
+    if f == 'Mono':
+        state = 'Mono'
+        line = 'One stored audio channel; left/right phase cannot be measured.'
+    elif 'dual mono' in f.lower():
+        state = 'Dual mono'
+        line = 'Two stored channels contain virtually identical sound.'
+    elif f == 'Stereo':
+        state = 'Stereo'
+        line = 'The file contains two measurably different channels.'
+    else:
+        state = 'Unclear'
+        line = 'The stored channel arrangement could not be classified reliably.'
+    return {'result':state, 'certainty':stereo.get('certainty','Unclear'),
+            'detail':line, 'format_result':f, 'phase_result':p,
+            'metrics':{**fm, **pm, 'phase_classification':p, 'format_classification':f},
+            'observations':list(stereo.get('observations') or [])+list(phase.get('observations') or [])}
+
+
 def sorted_findings(rows):
     items = dict(rows or [])
+    items['Stereo / phase'] = combine_stereo_phase(
+        items.get('Stereo format',{}),items.get('Stereo phase / delay',{}))
     order = list(LABELS)
     levels = {'strong': 3,'good': 2,'maybe': 1,'none': 0}
     # Source always first. A real NDR notch should be easy to find rather than
@@ -759,11 +834,11 @@ if report:
     report_version = str(meta.get("analyzer_version") or "unknown / earlier version")
     st.markdown(f'<div class="ac-analysis-build">Analyzed with engine: {html.escape(report_version)} · Current engine: {html.escape(ANALYZER_VERSION)}</div>', unsafe_allow_html=True)
     if report_version != ANALYZER_VERSION:
-        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.4.3 deployment completes.')
+        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.5.0 deployment completes.')
     results = sorted_findings(report.get("rows", []))
     plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(
-        card(LABELS[key][0], item, key, evidence_plots=(plots.get(key,[])))
+        card(LABELS[key][0], item, key, evidence_plots=(plots.get('Stereo phase / delay',[]) if key=='Stereo / phase' else plots.get(key,[])))
         for key, item in results) + '</div>', unsafe_allow_html=True)
     with st.expander("File details & all embedded tags"):
         info = meta.get("file_history", {}).get("facts", {})

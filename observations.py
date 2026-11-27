@@ -7,18 +7,48 @@ from __future__ import annotations
 
 from collections import Counter
 from math import isfinite
+import logging
+
+LOGGER = logging.getLogger("audiocheq.observations")
+
+def _field_text(value, maximum=200):
+    """Preserve readable content from irregular but valid MP3/FLAC tag values."""
+    if value is None:
+        return "(empty)"
+    if isinstance(value, (bytes, bytearray)):
+        return f"({len(value)} binary bytes)"
+    try:
+        text = str(value).replace("\x00", " ").replace("\r", " ").replace("\n", " ")
+    except Exception:
+        return f"({type(value).__name__})"
+    return text[:maximum]+("…" if len(text)>maximum else "")
+
+def _safe_number(value, fallback=0.0):
+    try:
+        number=float(value)
+        return number if isfinite(number) else fallback
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+
+def _safe_tag(entry):
+    if not isinstance(entry,dict):
+        return {"field":"Unlabelled tag", "source":"unknown", "value":_field_text(entry)}
+    return {"field":_field_text(entry.get("field", "Unlabelled tag"),90),
+            "source":_field_text(entry.get("source", "unknown"),70),
+            "value":_field_text(entry.get("value", ""),300)}
+
 
 from forensics import reference_candidates
 
 
-def enrich_findings(rows, windows, metadata, intervals):
+def _enrich_findings_inner(rows, windows, metadata, intervals):
     found = dict(rows)
     count = len(windows)
     analyzed = round(sum(float(s) for _, s in intervals), 1)
     window_times = ', '.join(f'{start:.1f}–{start+length:.1f}s' for start, length in intervals)
     fs = int(metadata.get('input_rate') or 0)
-    bitrate = metadata.get('file_history', {}).get('facts', {}).get('bitrate_kbps')
-    clipped = [w.get('clipped', 0) for w in windows]
+    bitrate = ((metadata.get('file_history') or {}).get('facts') or {}).get('bitrate_kbps')
+    clipped = [_safe_number(w.get('clipped', 0)) for w in windows]
 
     def add(key, *notes, **metrics):
         item = found.get(key)
@@ -28,8 +58,12 @@ def enrich_findings(rows, windows, metadata, intervals):
         saved.extend(str(s) for s in notes if s is not None and str(s))
         current = item.setdefault('metrics', {})
         for name, value in metrics.items():
-            if isinstance(value, (float, int)) and not isinstance(value, bool) and isfinite(value):
-                current.setdefault(name, value)
+            if isinstance(value, (float, int)) and not isinstance(value, bool):
+                try:
+                    if isfinite(value):
+                        current.setdefault(name, value)
+                except (TypeError, ValueError, OverflowError):
+                    pass
 
     common = (f'File: {metadata.get("codec", "unknown")} codec; {fs:,} Hz sampling; '
               f'{metadata.get("channels", "?")} channel(s); original Nyquist {fs/2:,.0f} Hz.')
@@ -172,13 +206,13 @@ def enrich_findings(rows, windows, metadata, intervals):
             'A lack of a reference prevents measurement; it is not evidence that the recording has zero flutter.')
 
     tunes = [w.get('tuning') or {} for w in windows]
-    tuned = [t for t in tunes if (t.get('metrics') or {}).get('votes', 0)]
+    tuned = [t for t in tunes if _safe_number((t.get('metrics') or {}).get('votes', 0)) > 0]
     if tuned:
         best = max(tuned, key=lambda x:x['metrics']['votes'])
         m = best['metrics']
         add('Pitch / musical tuning',
-            f'Tuning test: {m["votes"]} spectral-peak votes over {m["frames"]} pitched STFT frames '
-            f'from {m["notes"]} note bins; best ±13-cent cluster contains {m["fraction"]*100:.1f}% of votes.',
+            f'Tuning test: {m.get("votes", "?")} spectral-peak votes over {m.get("frames", "?")} pitched STFT frames '
+            f'from {m.get("notes", "?")} note bins; best ±13-cent cluster contains {_safe_number(m.get("fraction"))*100:.1f}% of votes.',
             'Reference convention A=440 Hz, 12-tone equal temperament; this is not a guaranteed original pitch.')
     else:
         detail = ', '.join(t.get('detail', '')[:100] for t in tunes[:2] if t.get('detail'))
@@ -220,7 +254,7 @@ def enrich_findings(rows, windows, metadata, intervals):
         sampled_sections=count)
 
     embedded = found.get('Embedded metadata') or {}
-    entries = embedded.get('tags', [])
+    entries = [_safe_tag(e) for e in (embedded.get('tags') or []) if e is not None]
     add('Embedded metadata',
         f'{len(entries)} readable, distinct text fields; Mutagen parser: {embedded.get("parser", "unknown")}; '
         f'{embedded.get("artwork_items",0)} artwork attachments skipped.',
@@ -234,6 +268,32 @@ def enrich_findings(rows, windows, metadata, intervals):
         'a complete MPX capture needs at least 128,000 samples/s.',
         f"RDS text fields embedded as file tags: {m.get('tagged_rds_fields',0)}; "
         f"validated RDS decoder groups: {m.get('rds_groups',0)}.",
-        *[f'Decoded {k}: {v}' for k,v in (rds.get('decoded') or {}).items()],
+        *[f'Decoded {_field_text(k,70)}: {_field_text(v)}' for k,v in ((rds.get('decoded') or {}) if isinstance(rds.get('decoded'), dict) else {}).items()],
         'An ordinary audio file, even one with a 19 kHz pilot trace, does not contain decodable 57 kHz RDS.')
     return rows
+
+
+def enrich_findings(rows, windows, metadata, intervals):
+    """Extra descriptions must never be a reason to lose measured results.
+
+    Known irregular tag representations (numbers/dates/missing labels) are
+    normalized above. An unexpected remaining problem is logged and only the
+    optional explanatory notes, never the actual signal measurements, degrade.
+    """
+    try:
+        return _enrich_findings_inner(rows, windows, metadata, intervals)
+    except (TypeError, ValueError, KeyError, AttributeError, OverflowError) as exc:
+        LOGGER.exception("Enriching descriptions failed (%s)",type(exc).__name__)
+        # Keep useful file-specific baseline measurements on any result that
+        # reached this point before an unusual metadata structure intervened.
+        count=len(windows)
+        length=sum(_safe_number(d) for _,d in intervals)
+        for _,item in rows:
+            if not isinstance(item,dict):
+                continue
+            notes=item.setdefault('observations',[])
+            if not notes:
+                notes.append(f'{count} excerpts, {length:.1f} s analyzed; ' +
+                             f'{metadata.get("input_rate", "?")} Hz file sample rate; ' +
+                             f'{metadata.get("channels", "?")} file channel(s).')
+        return rows
