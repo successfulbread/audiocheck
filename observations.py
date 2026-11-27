@@ -100,6 +100,22 @@ def _enrich_findings_inner(rows, windows, metadata, intervals):
         f'High-frequency surface-noise screen: {broad} crackly 0.5-second frames, '
         f'{quiet} qualifying quiet frames and {click_count} isolated click candidates in {active} active frames.')
 
+    hiss=[w.get('hiss') or {} for w in windows]
+    measured_hiss=[x for x in hiss if x.get('usable')]
+    if measured_hiss:
+        quiet_count=sum(int(x.get('quiet_frames',0)) for x in measured_hiss)
+        summary=(found.get('Background hiss') or {}).get('metrics') or {}
+        median_noise=float(summary.get('quiet_hiss_dbfs',-100))
+        add('Background hiss',
+            f'{quiet_count} quieter one-second frames gave a median high-band noise floor near '
+            f'{median_noise:.1f} dBFS in the 4.8–7.4 kHz range.',
+            f'{sum(int(bool(x.get("possible"))) for x in measured_hiss)}/{len(measured_hiss)} sections '
+            'showed a possible sustained broadband noise bed rather than only loud instrumental passages.')
+    else:
+        add('Background hiss',
+            'Insufficient quiet passages for a defensible noise-floor measurement; '
+            'do not interpret music or cymbals as tape hiss.')
+
     for base in (50, 60):
         tested = [w.get('mains', {}).get(base) or {} for w in windows]
         accepted = sum(int(x.get('count', 0)) for x in tested)

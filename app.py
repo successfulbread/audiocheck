@@ -1,4 +1,4 @@
-"""AudioCheQ v2.6.0 - integrated source evidence and readable forensic findings."""
+"""AudioCheQ v2.7.0 - integrated source evidence and readable forensic findings."""
 from __future__ import annotations
 
 import html
@@ -9,28 +9,28 @@ import logging
 
 import streamlit as st
 
-APP_VERSION = "2.6.0"
-st.set_page_config(page_title="AudioCheQ v2.6.0 | Find the clues", page_icon=":material/graphic_eq:", layout="wide", initial_sidebar_state="collapsed")
+APP_VERSION = "2.7.0"
+st.set_page_config(page_title="AudioCheQ v2.7.0 | Find the clues", page_icon=":material/graphic_eq:", layout="wide", initial_sidebar_state="collapsed")
 
 # Load this release's uniquely named engine from the SAME directory as app.py.
 # This avoids a stale analyzer.py left in GitHub or an unrelated `analyzer`
 # module elsewhere on the Python import path. There is no fallback to an old
 # analyzer, because it would silently undo the fixed NDR detection.
 import importlib.util
-ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v260.py")
+ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v270.py")
 if not ENGINE_PATH.is_file():
-    st.error("AudioCheQ v2.6.0 is missing its audio engine file.")
-    st.write("Missing: **audiocheq_engine_v260.py** beside **app.py**.")
-    st.info("Upload the matching files from the v2.6.0 update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
+    st.error("AudioCheQ v2.7.0 is missing its audio engine file.")
+    st.write("Missing: **audiocheq_engine_v270.py** beside **app.py**.")
+    st.info("Upload the matching files from the v2.7.0 update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
     st.stop()
 try:
-    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v260", ENGINE_PATH)
+    _spec = importlib.util.spec_from_file_location("audiocheq_engine_v270", ENGINE_PATH)
     if not _spec or not _spec.loader:
         raise ImportError("Cannot load engine from the local Python file")
     _engine = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_engine)
 except Exception as exc:
-    st.error("AudioCheQ could not load its v2.6.0 audio engine.")
+    st.error("AudioCheQ could not load its v2.7.0 audio engine.")
     st.code(f"{type(exc).__name__}: {exc}", language="text")
     st.write(f"Engine file: `{ENGINE_PATH.name}`")
     st.info("Check that the complete ZIP contents are in the repository root and that Streamlit has finished installing packages.txt and requirements.txt.")
@@ -45,7 +45,7 @@ if _analyzer_loaded != APP_VERSION or _missing_exports:
     if _missing_exports:
         st.write("Missing engine fields: " + ", ".join(_missing_exports))
     st.write(f"Loaded engine file: `{ENGINE_PATH.name}`")
-    st.info("Replace app.py and audiocheq_engine_v260.py together from the v2.6.0 update ZIP, then reboot the app.")
+    st.info("Replace app.py and audiocheq_engine_v270.py together from the v2.7.0 update ZIP, then reboot the app.")
     st.stop()
 
 MAX_BYTES = _engine.MAX_BYTES
@@ -233,7 +233,7 @@ st.markdown('''<div class="ac-hero">
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
 <p class="ac-tagline">Find the story hidden in the sound.</p>
-<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.6.0 &nbsp;·&nbsp; NDR notch detector 2.4</div></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.7.0 &nbsp;·&nbsp; NDR notch detector 2.7</div></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -275,6 +275,10 @@ LABELS = {
     'NDR-style 10 kHz dip': ('10 kHz broadcast-filter dip', '&#9836;'),
     'Stereo / phase': ('Channels & phase balance', '&#8646;'),
     'Vinyl rotation': ('Record rotation', '&#9673;'),
+    'Disc surface noise': ('Record surface crackle', '&#10022;'),
+    'Background hiss': ('Background hiss / tape noise', '&#8764;'),
+    'Possible tape dropouts': ('Brief sound dropouts', '&#9585;'),
+    'Audio bandwidth': ('Frequency range & cutoff', '&#8987;'),
     'Likely power system': ('Electrical hum', '&#9889;'),
     'Radio / TV signals': ('TV scanning signals', '&#9737;'),
     'FM stereo pilot': ('FM stereo pilot (19 kHz)', '&#9687;'),
@@ -311,6 +315,10 @@ def display_result(key, item):
                 return 'Stereo — channel delay detected'
             return 'Stereo — distinct left/right channels'
         return 'Channel format uncertain'
+    if key == 'Background hiss' and item.get('certainty') == 'Not measurable':
+        return 'Not enough quiet audio to measure hiss'
+    if key == 'Possible tape dropouts' and not meaningful(item):
+        return 'No likely sound dropouts detected'
     if key == 'Vinyl rotation' and not meaningful(item):
         return 'No reliable RPM pattern'
     if key == 'FM stereo pilot' and not meaningful(item):
@@ -337,15 +345,16 @@ def why(key, item):
         total = m.get('notch_tested_sections')
         counted = (f' in {hits} of {total} sections examined' if isinstance(hits, int) and isinstance(total, int) else '')
         if positive and center and depth:
-            return (f'There is a repeatable gap in the upper-frequency sound near {center} Hz. '
-                    f'The strongest dip is {depth} dB below the neighbouring frequencies and appears{counted}. '
-                    'A fixed dip like this is consistent with a filter used somewhere in an older broadcast or copying chain. '
-                    'The centre can shift when tape speed changes. It does not by itself identify NDR as the station.')
+            return (f'A notch means a narrow band of missing frequencies, rather than an overall loss of treble. '
+                    f'Here the notch is centred near {center} Hz (around 10 kHz), with sound {depth} dB weaker than the neighbouring bands{counted}. '
+                    'Decibels (dB) describe how much quieter the notch is; the repeated result makes a random musical gap less likely. '
+                    'A historical broadcast filter or later copy could leave this signature. '
+                    'The exact frequency can move with tape speed, and the notch does not identify NDR by itself.')
         if positive:
             return 'The detector reports a possible 10 kHz gap, but this saved result has no numeric measurements. Re-upload the recording with v2.5 to obtain a measured centre, depth and consistency check. A filter notch alone cannot identify NDR.'
         if center and depth:
             return (f'The strongest candidate was at {center} Hz and {depth} dB below adjacent sound, '
-                    'but it was not deep or repeatable enough on both sides to qualify. '
+                    'but it was not deep or repeatable enough on both sides to meet the tighter test. '
                     'A smooth loss of treble is not the same as an intentional narrow broadcast notch.')
         return ('This file did not provide enough usable upper-frequency sound to assess a narrow notch '
                 'around 10 kHz. A negative result does not prove the original recording lacked that filter.')
@@ -404,24 +413,83 @@ def why(key, item):
             ctext+='.'
         else:
             ctext=(' Frequency-range result: '+str(freq.get('result'))+'. '+str(freq.get('detail') or '')[:220] if freq.get('result') and freq.get('certainty') not in ('Unclear','Not measurable') else ' The file did not provide a trustworthy high-frequency cutoff measurement.')
-        confidence=(f'Estimated evidence confidence: {percent}% (heuristic, NOT a measured probability). '
+        confidence=(f'Confidence estimate: {percent}% (an evidence score, not a statistical probability). '
                     if isinstance(percent,int) else '')
         runner=str(item.get('alternative') or '')
-        score=f' The next strongest candidate was {runner}.' if runner else ''
-        caveat=(' A narrow 10 kHz broadcast dip is not specific to FM or NDR. '
-                'A TV scan tone might reflect interference from a screen during copying, rather than a TV broadcast. '
-                'A song can pass through several media before arriving as an MP3 or FLAC.')
-        return intro+confidence+reasons+ctext+score+(' '+str(context[0]) if context else '')+caveat
+        runner_points=m.get('runner_up_score',0)
+        score=(f' The next supported possibility is {runner}.'
+               if runner and isinstance(runner_points,(int,float)) and runner_points>0.7 else '')
+        gate=(m.get('fm_cutoff_qualifies') is True)
+        fm_rule=(' For an FM-origin verdict, AudioCheQ requires a sharp, measurable cutoff near the '
+                 'usual 15 kHz FM audio limit, not simply a 19 kHz pilot-like tone or a 10 kHz notch. ')
+        fm_status=('That compatible cutoff was measured in this file.' if gate else
+                   'That qualifying FM cutoff was not demonstrated, so FM cannot win the source ranking.')
+        independent=('Independent clues means different kinds of evidence, such as tape hiss plus flutter, '
+                     'not repeat measurements of the same noise.')
+        caveat=(' A notch near 10 kHz indicates broadcast/copying filtering, not a confirmed NDR station. '
+                'A TV scan-frequency tone can be interference from a screen during transfer. '
+                'A song may pass through several formats before ending up as MP3 or FLAC.')
+        return intro+confidence+reasons+ctext+score+fm_rule+fm_status+' '+independent+(' '+str(context[0]) if context else '')+caveat
 
     if key == 'Vinyl rotation':
         count = m.get('click_events')
         period = number('fitted_rotation_period_s', 3)
         err = number('click_fit_error_ms', 1)
         if positive and count and period:
-            return (f'{count} sharp events repeat about every {period} seconds'
-                    + (f' (timing variation {err} ms)' if err else '') + '. '
-                    'This can suggest the turntable speed, but drumbeats and other repeated sounds can produce similar intervals.')
+            return (f'RPM means revolutions per minute. {count} short clicks repeat about every {period} seconds, '
+                    'a spacing that resembles a particular record rotation speed.'
+                    + (f' The fit varies by about {err} milliseconds (thousandths of a second).' if err else '')
+                    + ' A scratch or defect can click once per revolution, but repeated percussion or editing can mimic the same pattern.')
         return 'No convincing repeating click sequence matched 33⅓, 45 or 78 RPM. A quiet record transfer may have no usable rotational clicks.'
+
+    if key == 'Disc surface noise':
+        if positive:
+            return ('Surface crackle means brief, irregular ticks over a broad range of frequencies, including quiet spaces. '
+                    + detail + ' These sounds can point to a record or shellac-disc transfer, but noisy tape and damaged digital copies can sometimes sound similar.')
+        return ('No convincing irregular record-surface clicks were isolated from the music. '
+                'A clean record or later noise-reduced copy can have no audible crackle.')
+
+    if key == 'Background hiss':
+        if item.get('certainty') == 'Not measurable':
+            return ('The music did not contain enough genuinely quiet passages to isolate the underlying noise. '
+                    'This is an unknown result, not a claim that the recording is hiss-free. '
+                    'Cymbals or bright instruments can otherwise be mistaken for tape hiss.')
+        level=number('quiet_hiss_dbfs',1)
+        frames=m.get('quiet_frames')
+        pers=number('persistent_percent',0)
+        if positive and level:
+            return (f'A broad, fairly steady noise was measured during {frames} quieter one-second passages. '
+                    f'The measured high-frequency noise floor was around {level} dBFS (decibels below digital full scale); '
+                    f'a consistent hiss-like pattern appeared in approximately {pers}% of the checked quiet frames. '
+                    'A steadier, flatter noise bed can support an analog tape-copying explanation, especially with dropouts or wow. '
+                    'Records, radio and earlier transfers can also contain hiss; it is not a cassette fingerprint on its own.')
+        return ('Quieter passages were examined, but they did not contain a steady enough high-frequency '
+                'noise floor to distinguish analog hiss from music or digital noise. This does not exclude a tape source.')
+
+    if key == 'Possible tape dropouts':
+        if positive:
+            return (detail + ' A dropout is a short reduction or loss of recorded sound, sometimes from '
+                    'worn tape, damaged magnetic coating or imperfect head contact. '
+                    'An edit or digital glitch could also cause the interruption; several separate dropouts are more persuasive.')
+        return ('No qualifying sudden losses of sound were found in the sampled passages. '
+                'That does not exclude cassette, because well-preserved tapes need not have audible dropouts.')
+
+    if key == 'Audio bandwidth':
+        cutoff=number('estimated_cutoff_khz',1)
+        diff=number('median_15khz_drop_db',1)
+        limit=number('nyquist_khz',1)
+        k='Frequency range describes the highest part of the sound spectrum that still has meaningful energy. '
+        if detail and not m:
+            k+=detail+' '
+        if cutoff:
+            k+=f'This file retains measurable sound or noise to around {cutoff} kHz.'
+        if diff is not None:
+            k+=f' The upper-frequency energy declines by about {diff} dB between the bands below and above 15 kHz.'
+        if limit:
+            k+=f' The file sample rate makes {limit} kHz the maximum representable frequency (Nyquist limit).'
+        return (k+' A sharp reduction around 15 kHz is consistent with FM audio filtering, but MP3 encoding, '
+                'tape copying and later processing can impose similar limits. The origin scorer only treats this '
+                'as an FM-compatible cutoff after checking how sharply it falls and whether low-bitrate compression could explain it.')
 
     if key == 'Likely power system':
         observed = detail if positive and detail else ('No reliable 50 or 60 Hz pattern was confirmed in this recording.')
@@ -450,8 +518,8 @@ def why(key, item):
             return (f'A narrow signal was measured at {hz} Hz, near the 19,000 Hz FM stereo pilot.'
                     + (f' It rises {prominence} dB above nearby sound.' if prominence else '')
                     + (f' {sections} sampled sections passed the strongest checks.' if isinstance(sections,int) else '')
-                    + ' This is evidence of an FM-related signal: the 19 kHz pilot helps the tuner reconstruct the 38 kHz stereo subcarrier. Other electronic tones can resemble it.')
-        return 'No reliable 19,000 Hz pilot was measured. Most FM tuners deliberately remove the pilot before sending out audio, so this does not rule out an FM recording.'
+                    + ' A pilot is a normally inaudible 19 kHz guide tone that helps FM stereo receivers rebuild the 38 kHz stereo-difference signal. Its prominence in dB measures how far it rises above nearby frequencies, not how loud it sounds. An electronic tone can mimic it, so the overall FM origin score also requires a compatible treble cutoff.')
+        return 'The FM stereo pilot is a narrow, normally inaudible 19,000 Hz guide tone. No sufficiently stable line was found. Tuners commonly remove it, so its absence does not rule out an earlier FM broadcast; the separate audio-cutoff test matters more to this app’s FM ranking.'
 
     if key == 'Wow and flutter' and 'unreliable' in raw.lower():
         rejected=number('rejected_rms_cents',1)
@@ -464,7 +532,8 @@ def why(key, item):
         rate = number('rate_hz', 2)
         if positive and rms and rate:
             return (f'A trackable reference tone varies by about {rms} cents RMS at a recurring rate of {rate} cycles per second. '
-                    'This can suggest small mechanical playback-speed variations. It cannot reliably separate tape from vinyl without other evidence.')
+                    'A cent is one hundredth of a musical semitone; RMS is the typical size of that variation. '
+                    'The rate in Hz is how often it repeats each second. Slow wow can come from tape transport or an off-centre record; quicker flutter often suggests mechanical transport instability. Neither proves cassette or vinyl alone.')
         return 'There was no stable reference tone that could be followed accurately enough to measure speed wobble. This is not evidence that the recording has no wow or flutter.'
 
     if key == 'Pitch / musical tuning':
@@ -473,7 +542,7 @@ def why(key, item):
         if isinstance(cents, (int,float)):
             return (f'Instrumental peaks group around {cents:+.1f} cents from standard A=440 tuning'
                     + (f', using {votes} candidate peaks' if isinstance(votes,int) else '') + '. '
-                    'That may indicate the musical tuning, but it does not establish that the playback speed is wrong. The players may have tuned differently.')
+                    'A cent is one hundredth of a semitone, and votes are the notes that support this estimate. It may reflect musical tuning, not wrong playback speed: the musicians may have tuned differently.')
         return 'The music did not contain a sufficiently consistent group of steady notes to estimate its overall tuning. Vocals, harmonics and instruments moving between notes make this uncertain.'
 
     if key == 'Playback speed':
@@ -499,7 +568,7 @@ def why(key, item):
         if encoder:
             parts.append(f'encoder {encoder}')
         if parts:
-            return ('This particular digital file uses ' + ', '.join(parts) + '. '
+            return ('This file is stored as ' + ', '.join(parts) + '. The bitrate in kbps is the amount of digital data per second, not the original recording quality. '
                     + (detail[:280] if detail else '') + ' Its encoding date is not the recording date; an old cassette could have been converted much later.')
         return detail or 'No reliable encoder or file age clue is present. A file timestamp rarely dates the original recording.'
 
@@ -544,6 +613,10 @@ def card(label, item, key=None, evidence_plots=None):
     available = {
         'Likely audio source': ['Vinyl','Cassette','FM','AM','TV / video','Digital','Unclear'],
         'Vinyl rotation': ['33⅓ RPM','45 RPM','78 RPM','No pattern'],
+        'Disc surface noise': ['Crackle','No clear crackle'],
+        'Background hiss': ['Hiss-like','No clear hiss','Unmeasurable'],
+        'Possible tape dropouts': ['Dropouts','No dropouts'],
+        'Audio bandwidth': ['FM-like cutoff','Limited highs','Wide range','Unclear'],
         'Likely power system': ['50 Hz','60 Hz','Unclear'],
         'Radio / TV signals': ['NTSC','PAL/SECAM','No signal','Unclear'],
         'FM stereo pilot': ['Detected','Not detected','Unavailable'],
@@ -560,6 +633,14 @@ def card(label, item, key=None, evidence_plots=None):
     if key == 'Likely audio source':
         choice = next((v for v,w in [('Vinyl','vinyl'),('Cassette','cassette'),('FM','fm radio'),
                                    ('AM','am radio'),('TV / video','tv / video'),('Digital','digital')] if w in raw), 'Unclear')
+    elif key == 'Disc surface noise':
+        choice = 'Crackle' if positive else 'No clear crackle'
+    elif key == 'Background hiss':
+        choice = 'Hiss-like' if positive else 'Unmeasurable' if item.get('certainty')=='Not measurable' else 'No clear hiss'
+    elif key == 'Possible tape dropouts':
+        choice = 'Dropouts' if positive else 'No dropouts'
+    elif key == 'Audio bandwidth':
+        choice = 'FM-like cutoff' if 'fm-like' in raw or 'sharp cutoff' in raw else 'Wide range' if 'wide range' in raw else 'Limited highs' if any(t in raw for t in ('limited highs','narrow range','mp3-like')) else 'Unclear'
     elif key == 'Vinyl rotation':
         choice = next((v for v,w in [('33⅓ RPM','33⅓'),('45 RPM','45'),('78 RPM','78')] if w in raw), 'No pattern')
     elif key == 'Likely power system':
@@ -608,6 +689,13 @@ def card(label, item, key=None, evidence_plots=None):
             if isinstance(repeats,int) and isinstance(total,int) and total:
                 info+=f' · {repeats}/{total} sections'
             add_metric('Dip depth / persistence',info)
+    elif key == 'Background hiss':
+        if positive:
+            add_metric('Noise level in quiet parts',m.get('quiet_hiss_dbfs'),'{:.1f} dBFS')
+            add_metric('Quieter passages checked',m.get('quiet_frames'),'{} s')
+    elif key == 'Audio bandwidth':
+        add_metric('Upper-frequency reach',m.get('estimated_cutoff_khz'),'{:.1f} kHz')
+        add_metric('High-frequency drop',m.get('median_15khz_drop_db'),'{:.1f} dB')
     elif key == 'Stereo / phase':
         add_metric('Stored channels',1 if raw=='mono' else 2 if raw in ('stereo','dual mono') else None)
         add_metric('Channel correlation',m.get('median_zero_corr',m.get('zero_corr',m.get('stereo_median_corr'))),'{:+.3f}')
@@ -615,6 +703,9 @@ def card(label, item, key=None, evidence_plots=None):
     elif key == 'FM stereo pilot':
         add_metric('Measured peak',m.get('measured_hz'),'{:,.1f} Hz')
         add_metric('Peak above nearby sound',m.get('prominence_db'),'{:.1f} dB')
+    elif key == 'Possible tape dropouts':
+        if positive:
+            add_metric('Short interruptions',next((int(v) for v in re.findall(r'\d+',str(item.get('result','')))[:1]),None))
     elif key == 'Vinyl rotation':
         add_metric('Aligned clicks',m.get('click_events'))
         add_metric('Click interval',m.get('fitted_rotation_period_s'),'{:.3f} s')
@@ -658,13 +749,26 @@ def card(label, item, key=None, evidence_plots=None):
     # Expert measurements are shown inside the SAME Why disclosure, below
     # the plain-language explanation. Never turn them into another tab.
     raw_notes=item.get('observations') if isinstance(item.get('observations'),list) else []
-    numeric_notes=[str(x) for x in raw_notes if any(c.isdigit() for c in str(x))]
+    # The first explanation covers the key finding. Only add raw observations
+    # that show additional *relevant* evidence, not sample-rate boilerplate or
+    # unrelated FFT thresholds. Make the purpose of the extra data explicit.
+    prefix_map={
+        'NDR-style 10 kHz dip':('Strongest candidate','Dip seen','Qualifying dip'),
+        'Likely power system':('50 Hz family','60 Hz family'),
+        'Radio / TV signals':('525-line TV','625-line TV'),
+        'Stereo / phase':('Phase-band','Decoded '),
+        'Vinyl rotation':('Accepted click-period','Fitted click interval'),
+        'FM stereo pilot':('19,000 Hz reference',),
+        'Background hiss':('quieter one-second','one-second frames'),
+        'Wow and flutter':('excerpts had a trackable',),
+    }
+    allowed=prefix_map.get(key,())
+    numeric_notes=[str(x) for x in raw_notes if allowed and str(x).lstrip().startswith(allowed)]
+    numeric_notes=numeric_notes[:2]
     if numeric_notes:
-        limit=8 if key in ('Likely audio source','Likely power system','Stereo / phase') else 6
-        # Show measurements first, not generic protocol boilerplate.
-        detail_html += ('<div class="ac-measure-head">Measured in this recording</div>'
+        detail_html += ('<div class="ac-measure-head">Supporting measurements</div>'
                         '<ul class="ac-measure-list">'+''.join(
-            '<li>'+html.escape(note[:500])+'</li>' for note in numeric_notes[:limit])+'</ul>')
+            '<li>'+html.escape(note[:330])+'</li>' for note in numeric_notes)+'</ul>')
     if key=='Embedded metadata' and isinstance(item.get('tags'),list) and item['tags']:
         tagrows=[]
         for entry in item['tags'][:90]:
@@ -886,7 +990,7 @@ if report:
     report_version = str(meta.get("analyzer_version") or "unknown / earlier version")
     st.markdown(f'<div class="ac-analysis-build">Analyzed with engine: {html.escape(report_version)} · Current engine: {html.escape(ANALYZER_VERSION)}</div>', unsafe_allow_html=True)
     if report_version != ANALYZER_VERSION:
-        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.6.0 deployment completes.')
+        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.7.0 deployment completes.')
     results = sorted_findings(report.get("rows", []))
     plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(

@@ -1,4 +1,4 @@
-"""AudioCheQ v2.4: traceable notch detection and channel evidence.
+"""AudioCheQ v2.7: weighted analog clues and conservative notch detection.
 
 Measures evidence, not proof of an original recording medium or location.
 Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
@@ -15,7 +15,7 @@ import tempfile
 import logging
 
 import numpy as np
-from scipy import ndimage, signal
+from scipy import ndimage, signal, integrate
 from file_history import inspect_file
 from metadata_inspector import inspect_metadata
 from rds_inspector import inspect_rds
@@ -24,8 +24,8 @@ from origin_fusion import score_origin
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
 
-ANALYZER_VERSION = "2.6.0"
-NOTCH_DETECTOR_VERSION = "2.4-broad-shoulder"
+ANALYZER_VERSION = "2.7.0"
+NOTCH_DETECTOR_VERSION = "2.7-stricter-two-shoulders"
 LOGGER = logging.getLogger("audiocheq.analyzer")
 
 MAX_SECONDS = 300.0
@@ -393,10 +393,10 @@ def _ndr_notch_window(audio, input_rate):
         frames+=1
     occurrence=successes/max(frames,1)
     advantage=depth-control95
-    supported = bool(depth>=2.55 and bilateral>=1.45 and
-                     advantage>=1.0 and occurrence>=.60 and frames>=2)
-    possible = bool(depth>=1.85 and bilateral>=1.0 and
-                    advantage>=.55 and occurrence>=.55 and frames>=2)
+    supported = bool(depth>=3.00 and bilateral>=1.65 and
+                     advantage>=1.2 and occurrence>=.65 and frames>=2)
+    possible = bool(depth>=2.30 and bilateral>=1.25 and
+                    advantage>=.85 and occurrence>=.65 and frames>=2)
     return {'freq':round(center_hz,2),'depth_db':round(depth,2),
             'occurrence':round(occurrence,3),'control95':round(control95,2),
             'frames':frames,'supported':supported,'possible':possible,
@@ -600,6 +600,93 @@ def _surface_noise_window(audio):
         r["quiet_frames"] * 5 + min(r["crackly_frames"], 30)
         + min(r["clicks"], 30) * .2
     ))
+
+
+
+def _hiss_window(audio, original_rate):
+    """Look for a steady broad noise bed in *genuinely quiet* passages.
+
+    Bright instruments and cymbals often look like hiss on a whole-song FFT.
+    We require quieter frames and sufficiently broadband, persistent high-band
+    noise. This is an indication of a transfer noise floor, not proof of tape.
+    """
+    if original_rate < 18000:
+        return None
+    mono = np.asarray(audio.mean(axis=1), dtype=np.float64)
+    y = signal.resample_poly(mono, 160, 441)  # 16 kHz; 4.8–7.4 kHz band
+    fs=16000
+    blocks = len(y)//fs
+    if blocks < 6:
+        return None
+    arr=[]
+    for ix in range(blocks):
+        seg=y[ix*fs:(ix+1)*fs]
+        rms=float(np.sqrt(np.mean(seg**2)))
+        ff, pp=signal.welch(seg,fs=fs,nperseg=4096,noverlap=2048)
+        high=(ff>=4800)&(ff<=7400)
+        mid=(ff>=1000)&(ff<=3900)
+        hp=np.maximum(pp[high],1e-24)
+        # Integrate over band, rather than reporting an arbitrary FFT bin.
+        high_db=10*np.log10(max(float(integrate.trapezoid(hp,ff[high])),1e-22))
+        medium=max(float(integrate.trapezoid(pp[mid],ff[mid])),1e-22)
+        ratio_db=10*np.log10(max(float(integrate.trapezoid(hp,ff[high])),1e-22)/medium)
+        flat=float(np.exp(np.mean(np.log(hp)))/np.mean(hp))
+        arr.append((rms,high_db,ratio_db,flat))
+    x=np.asarray(arr)
+    median_rms=float(np.median(x[:,0]))
+    # At least 7 dB quieter than the track's median; relaxed for inherently
+    # quiet input, but never infer noise from music-only loud passages.
+    quieter=(x[:,0] <= max(0.019, median_rms*.44))
+    checked=int(np.sum(quieter))
+    if checked < 2:
+        return {'usable':False,'quiet_frames':checked,'frames':blocks}
+    q=x[quieter]
+    median_level=float(np.median(q[:,1]))
+    median_flat=float(np.median(q[:,3]))
+    typical_ratio=float(np.median(q[:,2]))
+    candidate=((q[:,1]>=-82)&(q[:,1]<=-28)&(q[:,3]>=.53)&(q[:,2]>=-32))
+    persistence=float(np.mean(candidate))
+    spread=float(np.percentile(q[:,1],75)-np.percentile(q[:,1],25))
+    supported=(checked>=4 and persistence>=.75 and median_flat>=.62 and
+               median_level>=-69 and spread<=9.0)
+    possible=(persistence>=.60 and median_flat>=.54 and median_level>=-80 and spread<=12)
+    return {'usable':True,'quiet_frames':checked,'frames':blocks,
+            'noise_dbfs':round(median_level,1),'flatness':round(median_flat,3),
+            'ratio_db':round(typical_ratio,1),'persistent':round(persistence,3),
+            'spread_db':round(spread,1),'supported':bool(supported),
+            'possible':bool(possible)}
+
+
+def _consolidate_hiss(windows):
+    measured=[w.get('hiss') for w in windows if w.get('hiss') and w['hiss'].get('usable')]
+    if not measured:
+        return verdict('Hiss not measurable','Not measurable',
+            'There were too few genuinely quiet passages to separate a steady noise floor from cymbals and instruments.')
+    supported=[x for x in measured if x.get('supported')]
+    possible=[x for x in measured if x.get('possible')]
+    levels=[x['noise_dbfs'] for x in measured]
+    best=max(possible or measured,key=lambda x:x.get('persistent',0))
+    metric={'quiet_hiss_dbfs':round(float(np.median(levels)),1),
+            'quiet_frames':sum(x['quiet_frames'] for x in measured),
+            'persistent_percent':round(float(np.mean([x['persistent'] for x in measured]))*100,0),
+            'spectral_flatness':round(float(np.median([x['flatness'] for x in measured])),2),
+            'assessed_sections':len(measured),
+            'positive_sections':len(possible)}
+    if supported:
+        cert='High' if len(supported)>=2 else 'Possible'
+        label='Steady background hiss detected'
+    elif possible:
+        cert='Possible'
+        label='Possible broadband hiss'
+    else:
+        cert='Not detected'
+        label='No clear background hiss'
+    description=(f'In {metric["quiet_frames"]} genuinely quieter one-second passages, '
+                 f'the 4.8–7.4 kHz noise floor was approximately {metric["quiet_hiss_dbfs"]:.1f} dBFS; '
+                 f'broadband shape was consistent in about {metric["persistent_percent"]:.0f}% of these frames. '
+                 'A steady high-frequency noise bed can survive from tape, records or a radio transfer. '
+                 'Cymbals, remastering, and compression can produce similar noise; this measurement alone does not identify cassette.')
+    return {'result':label,'certainty':cert,'detail':description,'metrics':metric}
 
 
 def _consolidate_surface(windows):
@@ -1286,6 +1373,7 @@ def analyze_path(path, file_name=None, *, charts=False):
             "surface":guarded("surface noise",lambda: _surface_noise_window(audio),
                 {"quiet_frames":0,"crackly_frames":0,"frames":0,"clicks":0,
                  "quiet_clicks":0,"irregular":False,"high_frequency_ratio":0.0}),
+            "hiss":guarded("background hiss",lambda:_hiss_window(audio,metadata["input_rate"]),None),
             "mains":mains,"broadcast":air,"cutoff":cutoff,
             "bandwidth_feature":guarded("audio bandwidth",lambda: _bandwidth_window(
                                      audio,metadata["input_rate"]),None),
@@ -1318,6 +1406,7 @@ def analyze_path(path, file_name=None, *, charts=False):
     electrical = _consolidate_electrical(analyzed)
     broadcast = _consolidate_broadcast(analyzed)
     ndr = _consolidate_ndr(analyzed)
+    hiss = _consolidate_hiss(analyzed)
     pilot = _consolidate_fm_pilot(analyzed,metadata['input_rate'])
     phase_summary = _consolidate_phase(analyzed,metadata['channels'])
     tuning_summary = _consolidate_tuning(analyzed)
@@ -1336,7 +1425,7 @@ def analyze_path(path, file_name=None, *, charts=False):
                          pilot=pilot, ndr=ndr, dropout=dropout, bandwidth=bandwidth,
                          metadata=metadata, stereo=stereo, phase=phase_summary,
                          wow=wow_summary, power=electrical, speed=speed,
-                         rds=metadata["rds"])
+                         rds=metadata["rds"], hiss=hiss)
     # The frequency response supports the source guess, not an independent origin.
     source["frequency_clue"] = bandwidth
     rows=[
@@ -1347,6 +1436,7 @@ def analyze_path(path, file_name=None, *, charts=False):
         ('FM stereo pilot',pilot),
         ('NDR-style 10 kHz dip',ndr),
         ('Disc surface noise',surface),
+        ('Background hiss',hiss),
         ('Possible tape dropouts',dropout),
         ('Playback speed',speed),
         ('Pitch / musical tuning',tuning_summary),

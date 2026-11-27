@@ -1,0 +1,1486 @@
+"""AudioCheQ v2.7: weighted analog clues and conservative notch detection.
+
+Measures evidence, not proof of an original recording medium or location.
+Uses FFmpeg/FFprobe to decode bounded, distributed windows from a file.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import re
+from pathlib import Path
+import subprocess
+import tempfile
+import logging
+
+import numpy as np
+from scipy import ndimage, signal, integrate
+from file_history import inspect_file
+from metadata_inspector import inspect_metadata
+from rds_inspector import inspect_rds
+from observations import enrich_findings
+from origin_fusion import score_origin
+from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
+                       reference_candidates, speed_assessment)
+
+ANALYZER_VERSION = "2.7.0"
+NOTCH_DETECTOR_VERSION = "2.7-stricter-two-shoulders"
+LOGGER = logging.getLogger("audiocheq.analyzer")
+
+MAX_SECONDS = 300.0
+MIN_SECONDS = 4.0
+MAX_BYTES = 100 * 1024 * 1024
+SAMPLE_RATE = 44100
+EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".webm", ".opus", ".mpeg", ".mpga"}
+
+
+def verdict(result="Unclear", certainty="Unclear", detail="Insufficient distinctive evidence."):
+    return {"result": result, "certainty": certainty, "detail": detail}
+
+
+def _command(args, timeout=40):
+    try:
+        return subprocess.run(args, capture_output=True, check=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise ValueError("FFmpeg is unavailable on the server. Check packages.txt on Streamlit Cloud.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("The file took too long to decode; please try another file.") from exc
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("FFmpeg could not read the uploaded recording.") from exc
+
+
+def _probe(path):
+    p = _command([
+        "ffprobe", "-v", "error", "-select_streams", "a:0",
+        "-show_entries", "stream=codec_name,sample_rate,channels,duration,bit_rate,sample_fmt,bits_per_sample,bits_per_raw_sample:format=duration,format_name,bit_rate:stream_tags:format_tags",
+        "-of", "json", str(path)
+    ])
+    try:
+        data = json.loads(p.stdout)
+        stream = data["streams"][0]
+        duration = float(stream.get("duration") or data["format"]["duration"])
+        fs = int(stream["sample_rate"])
+        channels = int(stream["channels"])
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
+        raise ValueError("Unable to determine audio duration and format.") from exc
+    if not math.isfinite(duration) or duration < MIN_SECONDS:
+        raise ValueError("Please upload at least four seconds of audio.")
+    if duration > MAX_SECONDS + 0.25:
+        raise ValueError("Maximum recording length is 5 minutes (300 seconds).")
+    if fs < 4000 or channels not in (1, 2):
+        raise ValueError("Please upload mono or stereo audio with a standard sample rate.")
+    return {"duration": duration, "input_rate": fs, "channels": channels,
+            "codec": stream.get("codec_name", "unknown"),
+            "bit_rate": stream.get("bit_rate") or data.get("format", {}).get("bit_rate"),
+            "container": data.get("format", {}).get("format_name", "unknown"),
+            "sample_fmt": stream.get("sample_fmt"),
+            "bits_per_sample": stream.get("bits_per_raw_sample") or stream.get("bits_per_sample"),
+            "stream_tags": stream.get("tags") or {},
+            "format_tags": data.get("format", {}).get("tags") or {}}
+
+
+def _windows(duration):
+    """Examine up to four distinct 25-second spans spread through the song.
+
+    Do not concatenate windows before periodicity detection. A rotation signal
+    must recur within one continuous physical segment, not across jump cuts.
+    """
+    n = 1 if duration <= 38 else 2 if duration <= 95 else 3 if duration <= 190 else 4
+    width = min(25.0, duration / n)
+    if n == 1:
+        return [(0.0, float(width))]
+    starts = np.linspace(0.0, max(0.0, duration - width), n)
+    return [(float(start), float(width)) for start in starts]
+
+def _decode_window(path, start, seconds):
+    p = _command([
+        "ffmpeg", "-nostdin", "-v", "error", "-ss", f"{start:.3f}",
+        "-i", str(path), "-t", f"{seconds:.3f}", "-map", "0:a:0",
+        "-vn", "-f", "f32le", "-acodec", "pcm_f32le", "-ac", "2",
+        "-ar", str(SAMPLE_RATE), "pipe:1"
+    ], timeout=60)
+    raw = np.frombuffer(p.stdout, dtype="<f4")
+    if raw.size < SAMPLE_RATE * 2 * 4:
+        raise ValueError("Insufficient decoded audio for analysis.")
+    return raw[:(raw.size // 2) * 2].reshape(-1, 2).copy()
+
+
+def _psd(x, fs, seconds=6.0):
+    nper = min(len(x), max(4096, int(fs * seconds)))
+    return signal.welch(x, fs=fs, nperseg=nper, noverlap=nper // 2,
+                        scaling="spectrum", average="median")
+
+
+def _tone(f, power, rms_sq, target, tolerance, snr_gate=12, relative_gate=-76):
+    if f[-1] < target + 14:
+        return None
+    near = np.abs(f - target) <= tolerance
+    local = (np.abs(f - target) >= max(2.5, tolerance + 1.5)) & (np.abs(f - target) <= 14)
+    if near.sum() < 1 or local.sum() < 12:
+        return None
+    idx = np.where(near)[0][int(np.argmax(power[near]))]
+    peak = float(power[idx])
+    floor = float(np.median(power[local]))
+    if not np.isfinite(peak) or peak <= 0:
+        return None
+    snr = 10 * np.log10((peak + 1e-20) / (floor + 1e-20))
+    relative = 10 * np.log10((peak + 1e-20) / (rms_sq + 1e-20))
+    return {"freq": float(f[idx]), "snr": float(snr), "relative": float(relative),
+            "pass": bool(snr >= snr_gate and relative >= relative_gate)}
+
+
+def _mains_channel(x):
+    """Track narrowband energy in 8-second frames, including weak harmonics.
+
+    This is ENF-*presence* screening, NOT actual grid matching. Framewise
+    periodograms help reject brief musical notes and find persistent weak hum.
+    """
+    rate = 2000
+    low = signal.resample_poly(x.astype(np.float64), 20, 441)
+    block = min(rate * 8, (len(low)//rate)*rate)
+    hop = max(rate, block // 2)
+    if block < rate * 4:
+        return {base: {"count": 0, "weak": 0, "snr": 0.0, "freqs": [], "frames": 0} for base in (50,60)}
+    items = {base: {harmonic: [] for harmonic in range(1, 6)} for base in (50, 60)}
+    windows = 0
+    eps = 1e-24
+    full_power = max(float(np.mean(x.astype(float) ** 2)), eps)
+    for start in range(0, len(low) - block + 1, hop):
+        part = low[start:start + block]
+        if float(np.sqrt(np.mean(part * part))) < 1e-7:
+            continue
+        f, p = signal.periodogram(part, fs=rate, window="hann", scaling="spectrum")
+        windows += 1
+        for base in (50,60):
+            for harmonic in range(1, 6):
+                target = base * harmonic
+                # The shared 300 Hz multiple cannot distinguish 50 from 60 Hz.
+                if target == 300:
+                    continue
+                tol = max(0.45, harmonic * 0.4)
+                candidate = np.abs(f - target) <= tol
+                near = (np.abs(f-target) >= max(2.1, tol+1.25)) & (np.abs(f-target) <= 11)
+                if not np.any(candidate) or np.count_nonzero(near) < 10:
+                    continue
+                selected = np.where(candidate)[0]
+                peakidx = selected[int(np.argmax(p[candidate]))]
+                peak = float(p[peakidx])
+                floor = float(np.median(p[near]))
+                snr = 10 * np.log10((peak+eps)/(floor+eps))
+                relative = 10 * np.log10((peak+eps)/(full_power+eps))
+                items[base][harmonic].append((snr,relative,float(f[peakidx])))
+    results = {}
+    for base in (50,60):
+        count = 0
+        weak = 0
+        snrs = []
+        freqs = []
+        for harmonic, values in items[base].items():
+            if not values:
+                continue
+            arr = np.asarray(values)
+            strong_mask = (arr[:,0] >= 10.0) & (arr[:,1] >= -96)
+            weaker_mask = (arr[:,0] >= 7.0) & (arr[:,1] >= -103)
+            # Persistently constant line frequency is essential: broad music
+            # and randomly selected noise peaks drift across FFT frames.
+            needed = min(len(arr), max(3, math.ceil(0.6 * len(arr))))
+            for mask, required_snr, category in ((strong_mask, 10, 'strong'),
+                                                 (weaker_mask, 7, 'weak')):
+                if np.count_nonzero(mask) < needed:
+                    continue
+                observed = arr[mask,2]
+                center = float(np.median(observed))
+                consistent = np.abs(observed - center) <= 0.34
+                if np.count_nonzero(consistent) < needed:
+                    continue
+                good = arr[mask][consistent]
+                if category == 'strong':
+                    count += 1
+                else:
+                    weak += 1
+                snrs.append(float(np.median(good[:,0])))
+                freqs.append((harmonic, float(np.median(good[:,2]))))
+                break
+        results[base] = {"count": count, "weak": weak, "snr": round(sum(snrs),1),
+                         "freqs": freqs, "frames": windows}
+    return results
+
+
+def _scan_broadcast_tone(ch, target, margin, original_rate):
+    """Find a persistent *narrow* line near a broadcast standard.
+
+    Offset permits moderately mis-speeded analog copies; persistence and
+    spectral prominence reduce matches to ordinary music.
+    """
+    if original_rate / 2 < target + margin + 55:
+        return None
+    x=ch.astype(float)
+    f,p=_psd(x,SAMPLE_RATE,7)
+    candidates=np.where(np.abs(f-target)<=margin)[0]
+    if not len(candidates): return None
+    # Several adjacent FFT bins may contain the same physical line.
+    selected=candidates[np.argsort(p[candidates])[-10:]]
+    options=[]
+    rms=max(float(np.mean(x*x)),1e-20)
+    for idx in selected:
+        hz=float(f[idx]); peak=float(p[idx]);
+        floorband=(np.abs(f-hz)>=7)&(np.abs(f-hz)<=55)
+        if np.count_nonzero(floorband)<20: continue
+        floor=float(np.median(p[floorband]))
+        snr=10*np.log10((peak+1e-22)/(floor+1e-22))
+        relative=10*np.log10((peak+1e-22)/(rms+1e-22))
+        if snr<8 or relative < -106:
+            continue
+        half_results=[]
+        for half in np.array_split(x,2):
+            fh,ph=_psd(half,SAMPLE_RATE,5)
+            near=np.where(np.abs(fh-hz)<2.7)[0]
+            if not len(near): half_results.append(False);continue
+            j=near[np.argmax(ph[near])]
+            away=(np.abs(fh-fh[j])>=7)&(np.abs(fh-fh[j])<=55)
+            if np.count_nonzero(away)<20: half_results.append(False);continue
+            hsnr=10*np.log10((float(ph[j])+1e-22)/(float(np.median(ph[away]))+1e-22))
+            hrelative=10*np.log10((float(ph[j])+1e-22)/(max(float(np.mean(half*half)),1e-20)+1e-22))
+            half_results.append(bool(hsnr>=7.5 and hrelative>=-111))
+        persistent=all(half_results)
+        passed=bool(snr>=12 and relative>=-102 and persistent)
+        tentative=bool(snr>=9 and relative>=-106 and sum(half_results)>=1)
+        options.append({'freq':hz,'snr':float(snr),'relative':float(relative),
+                        'persistent':persistent,'pass':passed,'tentative':tentative,
+                        'offset':float(hz-target)})
+    return max(options,key=lambda v:(v['pass'],v['tentative'],v['snr']),default=None)
+
+
+def _spectrum_window(x, original_rate):
+    channels=(x[:,0],x[:,1]); reports=[_mains_channel(ch) for ch in channels]
+    electrical={}
+    for base in (50,60):
+        electrical[base]=max((r[base] for r in reports),
+            key=lambda r:(r['count'],r['weak'],r['snr']))
+    broadcast={}
+    specs=(('FM stereo pilot',19000.0,180.0),
+           ('625-line TV',15625.0,30.0),
+           ('525-line TV',15734.26,30.0))
+    for name,target,tol in specs:
+        attempts=[_scan_broadcast_tone(ch,target,tol,original_rate) for ch in channels]
+        if name == 'FM stereo pilot':
+            # A wider ±180-Hz speed-offset search examines many FFT bins:
+            # stronger prominence is required to avoid random-noise maxima.
+            for candidate in attempts:
+                if candidate:
+                    candidate['pass'] = bool(candidate['pass'] and candidate['snr'] >= 18)
+                    candidate['tentative'] = bool(candidate['persistent'] and
+                                                  candidate['snr'] >= 15 and
+                                                  candidate['relative'] >= -106)
+            attempts=[a for a in attempts if a and a['tentative']]
+        broadcast[name]=max((m for m in attempts if m),
+            key=lambda m:(m['pass'],m['tentative'],m['snr']),default=None)
+    mono=np.mean(x,axis=1,dtype=np.float64)
+    f,p=_psd(mono,SAMPLE_RATE,5)
+    cutoff=None
+    limit=min(20000, original_rate//2)
+    if len(p) and float(np.max(p))>1e-19:
+        reference=float(np.max(p))
+        for hz in range(1000,int(limit),500):
+            sel=(f>=hz)&(f<hz+500)
+            if np.any(sel) and float(np.max(p[sel]))>reference*10**(-65/10):
+                cutoff=hz+500
+    return electrical,broadcast,cutoff
+
+
+def _ndr_profile(audio, fs=SAMPLE_RATE):
+    """Spectrum suitable for measuring a broad, stable *loss* near 10 kHz.
+
+    Median Welch averages musical peaks over time. The very short (6 Hz)
+    smoothing prevents isolated FFT-bin minima from masquerading as notches.
+    """
+    y = np.asarray(audio, dtype=np.float64)
+    if y.ndim == 2:
+        y = y.mean(axis=1)
+    if len(y) < int(fs * 3):
+        return None
+    f, power = signal.welch(y, fs=fs, nperseg=min(16384, len(y)),
+                            noverlap=min(8192, len(y)//2),
+                            window='hann', average='median', scaling='density')
+    band = (f >= 8750) & (f <= 11450)
+    f, power = f[band], power[band]
+    if len(f) < 100:
+        return None
+    # A codec low-pass can leave a numerical noise floor above the cutoff.
+    # Do not interpret gaps in virtually absent high-frequency material.
+    overall = max(float(np.mean(y*y)), 1e-24)
+    activity = float(np.mean(power[(f >= 9500)&(f <= 10500)]))
+    if 10*np.log10(max(activity*1000, 1e-30)/overall) < -75:
+        return None
+    df = float(f[1]-f[0])
+    db = 10*np.log10(np.maximum(power, 1e-28))
+    smooth = ndimage.gaussian_filter1d(db, 6/df)
+    return f, smooth, df
+
+
+def _ndr_depth_curve(f, spectrum, df, width):
+    """Compare a candidate trough with BOTH shoulders beyond its edges.
+
+    22–140 Hz analysis scales allow a sharp electronic notch or the much
+    broader 80–200 Hz depression surviving MP3/cassette transfers. A smooth
+    high-frequency roll-off alone fails the two-sided shoulder requirement.
+    """
+    center = ndimage.uniform_filter1d(
+        spectrum, size=max(3, int(round(.5*width/df)) | 1))
+    wings = ndimage.uniform_filter1d(
+        spectrum, size=max(3, int(round(.65*width/df)) | 1))
+    left = np.interp(f - 1.5*width, f, wings)
+    right = np.interp(f + 1.5*width, f, wings)
+    depth = .5*(left+right) - center
+    bilateral = np.minimum(left-center, right-center)
+    return depth, bilateral, center, left, right
+
+
+def _ndr_notch_window(audio, input_rate):
+    """Find a persistent, two-sided 10 kHz dip despite transferred tape speed.
+
+    The NDR/ARD-era broadcast-filter clue can drift by a few hundred Hz and
+    be wider than one FFT neighbourhood. Check broad shoulders, independent
+    time blocks and non-notch comparison bands, not one lowest frequency bin.
+    This is evidence of a filtered broadcast path, never proof of NDR.
+    """
+    if input_rate < 22500:
+        return None
+    profile = _ndr_profile(audio)
+    if profile is None:
+        return None
+    f, smooth, df = profile
+    search = (f >= 9550)&(f <= 10475)
+    control = ((f >= 8920)&(f <= 9420)) | ((f >= 10650)&(f <= 11060))
+    candidates = []
+    for width in (22., 45., 85., 140.):
+        depth, bilateral, center, left, right = _ndr_depth_curve(f,smooth,df,width)
+        acceptable = search & (bilateral >= .95)
+        if not np.any(acceptable):
+            continue
+        eligible = np.flatnonzero(acceptable)
+        idx = int(eligible[np.argmax(depth[acceptable])])
+        # Comparison dips must also be two-sided, not just falling treble.
+        control_depth = np.maximum(depth[control], 0)
+        control_depth = np.where(bilateral[control] >= .95, control_depth, 0)
+        control95 = float(np.percentile(control_depth,95))
+        candidates.append((float(depth[idx]),int(idx),float(width),
+                           float(bilateral[idx]),control95,
+                           float(center[idx]),float(left[idx]),float(right[idx])))
+    if not candidates:
+        return {'freq':None,'depth_db':0.,'occurrence':0.,
+                'control95':0.,'frames':int(len(audio)//(SAMPLE_RATE*5)),
+                'supported':False,'possible':False,
+                'width_hz':0.,'bilateral_db':0.}
+    depth,idx,width,bilateral,control95,center_db,left_db,right_db = max(candidates,key=lambda x:x[0])
+    center_hz=float(f[idx])
+    # Independently test repeatability in five-second excerpts. Small changes
+    # in cassette speed can move the dip by about +/-60 Hz during a section.
+    y=np.asarray(audio,dtype=np.float64)
+    if y.ndim==2:y=y.mean(axis=1)
+    step=SAMPLE_RATE*5
+    successes=0; frames=0
+    for begin in range(0,len(y)-step+1,step):
+        small=_ndr_profile(y[begin:begin+step])
+        if small is None:continue
+        ff, ss,dd=small
+        local_depth,local_bilateral,_,_,_=_ndr_depth_curve(ff,ss,dd,width)
+        near=(ff >= center_hz-65)&(ff <= center_hz+65)
+        if not np.any(near):continue
+        passes = (local_depth[near]>=1.10)&(local_bilateral[near]>=.55)
+        successes+=int(bool(np.any(passes)))
+        frames+=1
+    occurrence=successes/max(frames,1)
+    advantage=depth-control95
+    supported = bool(depth>=3.00 and bilateral>=1.65 and
+                     advantage>=1.2 and occurrence>=.65 and frames>=2)
+    possible = bool(depth>=2.30 and bilateral>=1.25 and
+                    advantage>=.85 and occurrence>=.65 and frames>=2)
+    return {'freq':round(center_hz,2),'depth_db':round(depth,2),
+            'occurrence':round(occurrence,3),'control95':round(control95,2),
+            'frames':frames,'supported':supported,'possible':possible,
+            'width_hz':width,'bilateral_db':round(bilateral,2),
+            'center_db':round(center_db,2),
+            'left_shoulder_db':round(left_db,2),
+            'right_shoulder_db':round(right_db,2)}
+
+def _click_candidates(x, fs):
+    """Impulsive outliers from a short linear-prediction residual.
+
+    Restrict duration of the impulse. Percussion remains an important ambiguity.
+    """
+    if len(x) < fs * 10:
+        return np.empty(0, dtype=float)
+    work = signal.resample_poly(x, 160, 441) if fs == SAMPLE_RATE else x
+    rate = 16000 if fs == SAMPLE_RATE else fs
+    hp = signal.sosfilt(signal.butter(3, 2400, "highpass", fs=rate, output="sos"), work)
+    residual = hp[1:-1] - 0.5 * (hp[:-2] + hp[2:])
+    hop = max(1, int(rate * .0025))
+    n = len(residual) // hop
+    if n < 100:
+        return np.empty(0, dtype=float)
+    env = np.max(np.abs(residual[:n * hop].reshape(n, hop)), axis=1)
+    med = float(np.median(env)) + 1e-12
+    local = ndimage.median_filter(env, size=401, mode="reflect") + med * .1
+    excess = np.maximum(env - local, 0)
+    global_gate = max(med * 7.0, float(np.percentile(env, 99.3)) * 1.1)
+    peaks, _ = signal.find_peaks(env, height=global_gate,
+                                 prominence=global_gate * .6,
+                                 distance=max(1, int(.085 * rate / hop)))
+    if len(peaks) == 0:
+        return np.empty(0, dtype=float)
+    widths = signal.peak_widths(env, peaks, rel_height=.5)[0] * hop / rate
+    contrast = env[peaks] / local[peaks]
+    good = (widths <= .014) & (contrast >= 6.0) & (excess[peaks] >= med * 6)
+    return (peaks[good] * hop / rate).astype(float)
+
+
+def _rotation_matches(times, target_period, relaxed=False):
+    """Look for aligned *impulsive* clicks; relaxed matches stay tentative.
+
+    A musical beat alone is not admissible: input times must already have passed
+    the short-duration high-pass click filter. Require consecutive turns, a
+    stable fitted period and reasonable coverage to reject accidental grids.
+    """
+    min_events = 5 if relaxed else 9
+    if len(times) < min_events or len(times) > 320:
+        return None
+    speed_dev = .045 if relaxed else .025
+    periods = [target_period]
+    dt = times[:, None] - times[None, :]
+    positive = dt[dt > .2]
+    for mult in range(1, 14):
+        candidates = positive / mult
+        candidates = candidates[(candidates > target_period * (1-speed_dev)) &
+                                (candidates < target_period * (1+speed_dev))]
+        if candidates.size:
+            hist, edges = np.histogram(candidates, bins=30,
+                range=(target_period * (1-speed_dev), target_period * (1+speed_dev)))
+            for idx in np.argsort(hist)[-3:]:
+                if hist[idx] >= 2:
+                    periods.append(float((edges[idx] + edges[idx+1])/2))
+    best = None
+    for period in sorted(set(round(p, 5) for p in periods)):
+        tol = min(.035 if relaxed else .018, period * (.024 if relaxed else .012))
+        for anchor in times:
+            nturn = np.rint((times-anchor)/period).astype(int)
+            residual = np.abs(times-(anchor+nturn*period))
+            picked = residual < tol
+            if picked.sum() < min_events:
+                continue
+            keep = {}
+            for idx, t, err in zip(nturn[picked],times[picked],residual[picked]):
+                if idx not in keep or err < keep[idx][1]:
+                    keep[idx] = (float(t), float(err))
+            if len(keep) < min_events:
+                continue
+            keys = np.array(sorted(keep))
+            vals = np.array([keep[k][0] for k in keys])
+            span = (keys[-1]-keys[0])*period
+            coverage = len(keys)/(keys[-1]-keys[0]+1)
+            neighbors = int(np.count_nonzero(np.diff(keys)==1))
+            if span < (7 if relaxed else 15) or coverage < (.44 if relaxed else .60) or neighbors < (3 if relaxed else 7):
+                continue
+            slope, offset = np.polyfit(keys.astype(float),vals,1)
+            if abs(slope-target_period) > target_period*speed_dev:
+                continue
+            fiterr = float(np.sqrt(np.mean((vals-(slope*keys+offset))**2)))
+            if fiterr > (.023 if relaxed else .010):
+                continue
+            fraction = len(keys)/max(len(times),1)
+            if fraction < (.085 if relaxed else .17):
+                continue
+            score = len(keys)*coverage/(1+fiterr*80)
+            if best is None or score > best['score']:
+                best = {'score':score,'events':len(keys),'pairs':neighbors,
+                        'span':span,'period':float(slope), 'fit_ms':fiterr*1000,
+                        'relaxed':relaxed}
+    return best
+
+def _vinyl_window(audio):
+    records = {}
+    for ch in range(2):
+        times = _click_candidates(audio[:, ch].astype(float), SAMPLE_RATE)
+        duration = len(audio) / SAMPLE_RATE
+        if len(times) < 5 or len(times) > duration * 10:
+            continue
+        for rpm, period in ((33.333, 1.8), (45.0, 4/3), (78.0, 60/78)):
+            strict = _rotation_matches(times, period, relaxed=False)
+            evidence = strict or _rotation_matches(times, period, relaxed=True)
+            if evidence and (rpm not in records or evidence['score'] > records[rpm]['score']):
+                records[rpm] = evidence
+    if not records:
+        return None
+    ranked = sorted(records.items(),key=lambda item:(not item[1]['relaxed'],item[1]['score']),reverse=True)
+    if len(ranked)>1 and ranked[0][1]['relaxed']==ranked[1][1]['relaxed'] and ranked[0][1]['score'] < ranked[1][1]['score']*1.22:
+        return None
+    return {'rpm':ranked[0][0],**ranked[0][1]}
+
+def _crackle_window(audio):
+    """Count non-rhythmic impulsive clicks; weaker hint than rotational defects.
+
+    These are *not* a vinyl classifier. Clipped percussion, digital glitches,
+    radio static and transfer defects can make similar impulses.
+    """
+    channel_counts = []
+    for ch in range(2):
+        ts = _click_candidates(audio[:,ch], SAMPLE_RATE)
+        if len(ts) < 6:
+            continue
+        intervals = np.diff(ts)
+        if len(intervals) < 5:
+            continue
+        cv = float(np.std(intervals) / (np.mean(intervals)+1e-12))
+        if cv < 0.45:
+            continue  # regular beats are unlikely to be random surface crackle
+        if len(ts) > 120:
+            continue  # highly transient music is not informative
+        channel_counts.append(len(ts))
+    return max(channel_counts, default=0)
+
+
+def _surface_noise_window(audio):
+    """Screen for irregular broadband disc surface crackle.
+
+    Unlike RPM detection, this does NOT require one defect per revolution.
+    Check high-pass impulsiveness in half-second frames, and preferentially
+    count noise in quiet passages. Short, regular drums must not be treated
+    as record-surface evidence on their own.
+
+    Output is an evidence feature set, NOT a calibrated probability.
+    """
+    channel_reports = []
+    for channel in range(audio.shape[1]):
+        work = signal.resample_poly(audio[:, channel].astype(np.float64), 160, 441)
+        fs = 16000
+        high = signal.sosfilt(
+            signal.butter(4, 3800, btype="highpass", fs=fs, output="sos"), work
+        )
+        frame = fs // 2
+        n = len(work) // frame
+        if n < 8:
+            continue
+        raw = work[:n * frame].reshape(n, frame)
+        upper = high[:n * frame].reshape(n, frame)
+        full_rms = np.sqrt(np.mean(raw * raw, axis=1) + 1e-20)
+        high_rms = np.sqrt(np.mean(upper * upper, axis=1) + 1e-20)
+        ratio = high_rms / (full_rms + 1e-12)
+        centered = upper - upper.mean(axis=1, keepdims=True)
+        variance = np.mean(centered * centered, axis=1)
+        fourth = np.mean(centered ** 4, axis=1)
+        kurt = fourth / (variance * variance + 1e-22)
+        active = (full_rms > 0.00020) & (high_rms > 0.00015)
+        typical = max(float(np.median(full_rms[active])) if np.any(active) else 0, 1e-5)
+        quiet = (active & (full_rms < 0.52 * typical)
+                 & (ratio >= 0.115) & (kurt >= 10))
+        crackly = active & (kurt >= 11) & (ratio >= .045)
+        # Existing strong impulsive-click detector is additional independent
+        # evidence; use CV to reject exact click trains / drum machines.
+        events = _click_candidates(audio[:, channel], SAMPLE_RATE)
+        gaps = np.diff(events)
+        irregular = bool(len(events) >= 10 and len(gaps) >= 7 and
+                         np.std(gaps) / max(np.mean(gaps), 1e-12) > .58)
+        event_frames = np.floor(events * 2).astype(int)
+        quiet_clicks = int(sum(0 <= t < len(quiet) and quiet[t] for t in event_frames))
+        channel_reports.append({
+            "quiet_frames": int(quiet.sum()),
+            "crackly_frames": int(crackly.sum()),
+            "frames": int(active.sum()),
+            "clicks": int(len(events)),
+            "quiet_clicks": quiet_clicks,
+            "irregular": irregular,
+            "high_frequency_ratio": float(np.median(ratio[active])) if np.any(active) else 0.0,
+        })
+    if not channel_reports:
+        return {"quiet_frames": 0, "crackly_frames": 0, "frames": 0,
+                "clicks": 0, "quiet_clicks": 0, "irregular": False,
+                "high_frequency_ratio": 0.0}
+    return max(channel_reports, key=lambda r: (
+        r["quiet_frames"] * 5 + min(r["crackly_frames"], 30)
+        + min(r["clicks"], 30) * .2
+    ))
+
+
+
+def _hiss_window(audio, original_rate):
+    """Look for a steady broad noise bed in *genuinely quiet* passages.
+
+    Bright instruments and cymbals often look like hiss on a whole-song FFT.
+    We require quieter frames and sufficiently broadband, persistent high-band
+    noise. This is an indication of a transfer noise floor, not proof of tape.
+    """
+    if original_rate < 18000:
+        return None
+    mono = np.asarray(audio.mean(axis=1), dtype=np.float64)
+    y = signal.resample_poly(mono, 160, 441)  # 16 kHz; 4.8–7.4 kHz band
+    fs=16000
+    blocks = len(y)//fs
+    if blocks < 6:
+        return None
+    arr=[]
+    for ix in range(blocks):
+        seg=y[ix*fs:(ix+1)*fs]
+        rms=float(np.sqrt(np.mean(seg**2)))
+        ff, pp=signal.welch(seg,fs=fs,nperseg=4096,noverlap=2048)
+        high=(ff>=4800)&(ff<=7400)
+        mid=(ff>=1000)&(ff<=3900)
+        hp=np.maximum(pp[high],1e-24)
+        # Integrate over band, rather than reporting an arbitrary FFT bin.
+        high_db=10*np.log10(max(float(integrate.trapezoid(hp,ff[high])),1e-22))
+        medium=max(float(integrate.trapezoid(pp[mid],ff[mid])),1e-22)
+        ratio_db=10*np.log10(max(float(integrate.trapezoid(hp,ff[high])),1e-22)/medium)
+        flat=float(np.exp(np.mean(np.log(hp)))/np.mean(hp))
+        arr.append((rms,high_db,ratio_db,flat))
+    x=np.asarray(arr)
+    median_rms=float(np.median(x[:,0]))
+    # At least 7 dB quieter than the track's median; relaxed for inherently
+    # quiet input, but never infer noise from music-only loud passages.
+    quieter=(x[:,0] <= max(0.019, median_rms*.44))
+    checked=int(np.sum(quieter))
+    if checked < 2:
+        return {'usable':False,'quiet_frames':checked,'frames':blocks}
+    q=x[quieter]
+    median_level=float(np.median(q[:,1]))
+    median_flat=float(np.median(q[:,3]))
+    typical_ratio=float(np.median(q[:,2]))
+    candidate=((q[:,1]>=-82)&(q[:,1]<=-28)&(q[:,3]>=.53)&(q[:,2]>=-32))
+    persistence=float(np.mean(candidate))
+    spread=float(np.percentile(q[:,1],75)-np.percentile(q[:,1],25))
+    supported=(checked>=4 and persistence>=.75 and median_flat>=.62 and
+               median_level>=-69 and spread<=9.0)
+    possible=(persistence>=.60 and median_flat>=.54 and median_level>=-80 and spread<=12)
+    return {'usable':True,'quiet_frames':checked,'frames':blocks,
+            'noise_dbfs':round(median_level,1),'flatness':round(median_flat,3),
+            'ratio_db':round(typical_ratio,1),'persistent':round(persistence,3),
+            'spread_db':round(spread,1),'supported':bool(supported),
+            'possible':bool(possible)}
+
+
+def _consolidate_hiss(windows):
+    measured=[w.get('hiss') for w in windows if w.get('hiss') and w['hiss'].get('usable')]
+    if not measured:
+        return verdict('Hiss not measurable','Not measurable',
+            'There were too few genuinely quiet passages to separate a steady noise floor from cymbals and instruments.')
+    supported=[x for x in measured if x.get('supported')]
+    possible=[x for x in measured if x.get('possible')]
+    levels=[x['noise_dbfs'] for x in measured]
+    best=max(possible or measured,key=lambda x:x.get('persistent',0))
+    metric={'quiet_hiss_dbfs':round(float(np.median(levels)),1),
+            'quiet_frames':sum(x['quiet_frames'] for x in measured),
+            'persistent_percent':round(float(np.mean([x['persistent'] for x in measured]))*100,0),
+            'spectral_flatness':round(float(np.median([x['flatness'] for x in measured])),2),
+            'assessed_sections':len(measured),
+            'positive_sections':len(possible)}
+    if supported:
+        cert='High' if len(supported)>=2 else 'Possible'
+        label='Steady background hiss detected'
+    elif possible:
+        cert='Possible'
+        label='Possible broadband hiss'
+    else:
+        cert='Not detected'
+        label='No clear background hiss'
+    description=(f'In {metric["quiet_frames"]} genuinely quieter one-second passages, '
+                 f'the 4.8–7.4 kHz noise floor was approximately {metric["quiet_hiss_dbfs"]:.1f} dBFS; '
+                 f'broadband shape was consistent in about {metric["persistent_percent"]:.0f}% of these frames. '
+                 'A steady high-frequency noise bed can survive from tape, records or a radio transfer. '
+                 'Cymbals, remastering, and compression can produce similar noise; this measurement alone does not identify cassette.')
+    return {'result':label,'certainty':cert,'detail':description,'metrics':metric}
+
+
+def _consolidate_surface(windows):
+    """Conservative qualitative disc-noise conclusion from independent clues."""
+    reports = [w["surface"] for w in windows]
+    quiet = sum(r["quiet_frames"] for r in reports)
+    broad = sum(r["crackly_frames"] for r in reports)
+    clicks = sum(r["clicks"] for r in reports if r["irregular"])
+    broad_sections = sum(r["crackly_frames"] >= 9 for r in reports)
+    irregular_sections = sum(r["irregular"] for r in reports)
+    # Most convincing: irregular impulses and granular non-Gaussian HF noise
+    # *during quiet passages*, which are less likely to be drums.
+    if quiet >= 3 and broad >= 8 and irregular_sections >= 1:
+        strong_disc = quiet >= 5 and broad >= 25 and clicks >= 12
+        detail = (f"Detected irregular short clicks ({clicks} in qualifying sections) "
+                  f"and a crackling high-frequency texture in {broad} half-second frames. "
+                  f"Importantly, {quiet} noisy frames occurred during quieter passages, "
+                  "where ordinary musical percussion is less likely to explain them. "
+                  "This strongly suggests a transferred grooved disc (vinyl or shellac); "
+                  "it does not reveal record RPM or prove the last playback device was a turntable.")
+        return verdict("Disc crackle found", "High" if strong_disc else "Possible", detail)
+    if (irregular_sections >= 2 and broad_sections >= 2 and broad >= 20) or (
+        quiet >= 3 and broad >= 14):
+        return verdict(
+            "Disc-like surface crackle", "Tentative",
+            f"Random short impulses and a granular high-frequency texture appear in "
+            f"{broad} half-second frames, including {quiet} quiet frames. "
+            "These are consistent with a disc transfer but could be noise from another source.",
+        )
+    if irregular_sections and broad >= 12:
+        return verdict(
+            "Some surface-crackle evidence", "Tentative",
+            f"Irregular impulsive noise and high-frequency transients appear in {broad} "
+            "half-second frames, but quiet-section corroboration is insufficient.",
+        )
+    return verdict(
+        "No distinctive disc crackle found", "Not detected",
+        "No sufficiently corroborated irregular high-frequency crackle appeared "
+        "in the sections analyzed. Clean records may produce none.",
+    )
+
+
+def _consolidate_vinyl(windows):
+    hits=[w['vinyl'] for w in windows if w['vinyl']]
+    if not hits:
+        return verdict('No reliable RPM clue','Not detected',
+            'No sufficiently repeatable, sharp click train aligned with 33⅓, 45 or 78 RPM. ' 
+            'Random surface crackle can indicate a record without giving its speed.')
+    # Strong matches outrank tentative matches; do not average distinct speeds.
+    strict=[h for h in hits if not h.get('relaxed')]
+    ranked_pool=strict if strict else hits
+    totals={}
+    for h in ranked_pool:
+        totals[h['rpm']]=totals.get(h['rpm'],0)+h['score']
+    ranked=sorted(totals.items(), key=lambda kv:kv[1],reverse=True)
+    if len(ranked)>1 and ranked[0][1] < ranked[1][1]*1.24:
+        return verdict('Possible turntable pattern','Tentative',
+            'Several rotation speeds fit similarly. Short rhythmic musical sounds may be responsible.')
+    rpm=ranked[0][0]
+    matched=[h for h in ranked_pool if h['rpm']==rpm]
+    events=max(h['events'] for h in matched)
+    name=('33⅓' if abs(rpm-33.333)<.2 else f'{rpm:g}')
+    high_match = bool(strict and any(h['events'] >= 10 and h['pairs'] >= 7 for h in matched))
+    good_match = bool(strict or any(h['events'] >= 7 and h['pairs'] >= 5
+                                    and h['fit_ms'] <= 16 for h in matched))
+    label = f'Likely {name} RPM' if good_match else f'Possible {name} RPM'
+    detail = (f'{events} quick clicks match the timing of a {name} RPM disc '
+              f'in {len(matched)} section(s). '
+              'Music or repeated drum sounds can sometimes imitate this pattern.')
+    return verdict(label, 'High' if high_match else 'Possible' if good_match else 'Tentative', detail)
+
+def _consolidate_electrical(windows):
+    """Report the best-supported family, including a transparent weak best guess."""
+    candidates=[]
+    for base in (50,60):
+        sections=[w['mains'][base] for w in windows]
+        rich=sum(s['count']>=2 for s in sections)
+        mixed=sum(s['count']>=1 and s['count']+s['weak']>=2 for s in sections)
+        singles=sum(s['count']>=1 for s in sections)
+        weak=sum(s['weak']>=1 for s in sections)
+        total=sum(2*s['count']+s['weak'] for s in sections)
+        strength=sum(s['snr'] for s in sections)
+        if rich>=2: level=3
+        elif rich>=1 or mixed>=2: level=2
+        elif mixed>=1 or singles>=2: level=1
+        elif singles>=1 or weak>=2: level=.5
+        elif weak>=1: level=.25  # one persistent, weak harmonic: tentative guess only
+        else: level=0
+        freqs=[float(f) for item in sections for _,f in item['freqs']]
+        candidates.append({'base':base,'level':level,'total':total,'strength':strength,'freqs':freqs})
+    ranked=sorted(candidates,key=lambda c:(c['level'],c['total'],c['strength']),reverse=True)
+    top,rival=ranked
+    if top['level']==0:
+        return verdict('Uncertain', 'Unclear',
+            'Neither 50 Hz nor 60 Hz showed a persistent narrow tone. No regional guess is supported.')
+    base=top['base']
+    ambiguous=(rival['level']>0 and top['level']-rival['level']<1
+               and top['total']<=rival['total']+2)
+    if ambiguous:
+        # A stronger *stable fundamental* is meaningful even without harmonics.
+        # Tie-breaking is speculative, so label as tentative rather than certain.
+        if top['strength'] < rival['strength']*1.20:
+            return verdict('Uncertain', 'Unclear',
+                 'Both 50 Hz and 60 Hz had similar weak peaks, which might be musical notes. '
+                 'There is no reliable reason to choose one.')
+    region='50 Hz region (Europe and others)' if base==50 else '60 Hz region (N. America and others)'
+    certainty='Strong' if top['level']>=3 and rival['level']==0 else ('Possible' if top['level']>=2 and not ambiguous else 'Tentative')
+    examples=', '.join(f'{f:.1f}' for f in list(dict.fromkeys(top['freqs']))[:5])
+    if ambiguous:
+        detail=(f'The {base} Hz candidate has stronger narrowband evidence than the '
+                f'{rival["base"]} Hz candidate, although both occur in the file. ')
+    else:
+        detail=(f'Persistent frequency bands are compatible with {base} Hz power. ')
+    detail+=f'Detected peaks include {examples} Hz. '
+    if top['level']<2: detail+='This is a weak or isolated tone, not a confirmed electrical-hum pattern. '
+    detail+='This indicates possible electrical interference somewhere in the recording chain, not the studio country.'
+    return verdict(('Possible ' if certainty=='Tentative' else 'Likely ')+region,certainty,detail)
+
+def _consolidate_broadcast(windows):
+    labels={'FM stereo pilot':'FM radio pilot',
+            '625-line TV':'PAL/SECAM-type TV interference',
+            '525-line TV':'NTSC-type TV interference'}
+    findings=[]
+    for name in ('FM stereo pilot','625-line TV','525-line TV'):
+        reports=[w['broadcast'].get(name) for w in windows]
+        strong=[r for r in reports if r and r['pass']]
+        weak=[r for r in reports if r and r.get('tentative')]
+        if len(strong)>=2 or (len(windows)==1 and len(strong)==1): level=2
+        elif strong or len(weak)>=2 or (len(windows)==1 and len(weak)==1):level=1
+        else:continue
+        evidence=strong if strong else weak
+        best=max(evidence,key=lambda r:r['snr'])
+        findings.append((name,level,len(strong),len(weak),best))
+    if not findings:
+        cutoff=max((w.get('cutoff') or 0) for w in windows)
+        if not cutoff or cutoff<15000:
+            return verdict('High-frequency signal unavailable','Not measurable',
+                'This recording may be filtered below the frequencies needed to assess TV and FM pilot tones.')
+        return verdict('No broadcast tones detected','Not detected',
+            'No repeatable 15.625 kHz, 15.734 kHz or 19 kHz pilot/scan tone cleared the screening checks.')
+    findings.sort(key=lambda t:(t[1],t[4]['snr']),reverse=True)
+    best=findings[0]
+    # Corroborated findings can coexist (radio broadcast played through a TV).
+    strong=[f for f in findings if f[1]==2]
+    selected=strong if strong else [best]
+    names=' + '.join(labels[f[0]] for f in selected)
+    details=[]
+    for name,level,nstrong,nweak,meas in selected:
+        details.append(f'{labels[name]}: a persistent narrow peak at {meas["freq"]:.1f} Hz '
+                       f'({meas["snr"]:.0f} dB above neighbouring frequencies).')
+    return verdict(('Likely ' if strong else 'Possible ')+names,
+        'High' if strong and best[4]['snr'] >= 18 else 'Possible' if strong else 'Tentative',
+        ' '.join(details)+' This is a clue to equipment or later copying, not proof of the original studio country.')
+
+
+
+def _consolidate_fm_pilot(windows, original_rate):
+    """Independent FM-pilot report (formerly bundled with the TV card)."""
+    eligible=original_rate >= 38470  # Nyquist must include the full ±180-Hz search band.
+    reports=[w.get('broadcast',{}).get('FM stereo pilot') for w in windows]
+    strong=[r for r in reports if r and r.get('pass')]
+    weak=[r for r in reports if r and r.get('tentative') and not r.get('pass')]
+    measured=strong or weak
+    if not eligible:
+        return verdict('19 kHz unavailable','Not measurable',
+            f'Original sample rate {original_rate:,} Hz gives a Nyquist limit of {original_rate/2:,.0f} Hz; the 19 kHz pilot search needs preserved high-frequency content.')
+    if not measured:
+        return verdict('No pilot found','Not detected',
+            'A 19,000 Hz FM-stereo pilot must be narrow, locally prominent and stable in both halves of an excerpt. No candidate met those thresholds. A normal FM receiver often removes its pilot; non-detection does NOT exclude FM.')
+    best=max(measured,key=lambda m:(m.get('pass',False),m['snr']))
+    obs=float(np.median([r['freq'] for r in measured]))
+    deviation=obs-19000
+    mean_snr=float(np.median([r['snr'] for r in measured]))
+    relative=float(np.median([r['relative'] for r in measured]))
+    reliable=bool((len(strong)>=2 or (len(windows)==1 and strong)) and mean_snr>=16)
+    confidence='High' if reliable else 'Possible' if strong else 'Tentative'
+    label='FM pilot likely' if reliable else 'Possible FM pilot'
+    detail=(f'Observed a narrow line at {obs:.2f} Hz (standard 19,000.00 Hz; offset {deviation:+.2f} Hz). '
+            f'Median local peak prominence {mean_snr:.1f} dB, level {relative:.1f} dB '
+            f'relative to channel RMS²; {len(strong)} strong and {len(weak)} tentative '
+            f'excerpts among {len(windows)} sampled sections. Strong FM evidence means at least 18 dB '
+            'above the ±7–55 Hz local sidebands, adequate relative level, and persistence '
+            'in both half-sections. The transmitter reference tolerance is roughly ±2 Hz; '
+            'a shifted line might reflect copying speed, clock error or a different tone. '
+            'A receiver usually filters out its 19 kHz pilot, so absence does not rule '
+            'out FM. 38 kHz suppressed subcarrier is NOT measured in this 44.1 kHz analysis path.')
+    return {'result':label,'certainty':confidence,'detail':detail,
+            'metrics':{'measured_hz':round(obs,3),'nominal_hz':19000,
+                       'deviation_hz':round(deviation,3),'prominence_db':round(mean_snr,1),
+                       'relative_db':round(relative,1),'strong_sections':len(strong),
+                       'possible_sections':len(weak),'sampled_sections':len(windows)}}
+
+
+def _consolidate_phase(windows, channels):
+    if channels == 1:
+        return stereo_phase(np.empty((0,2)),channels=1)
+    valid=[w['phase'] for w in windows if w.get('phase') and w['phase'].get('metrics')]
+    if not valid:
+        return verdict('Cannot assess phase','Not measurable','Not enough correlated channel content to estimate a timing relationship.')
+    # A multi-section conclusion must not hide inconsistent channel structure.
+    names=[x['result'] for x in valid]
+    best=max(set(names),key=lambda n:(names.count(n),-names.index(n)))
+    typical=next(x for x in valid if x['result']==best)
+    valid_corr=[x['metrics']['zero_corr'] for x in valid if x['metrics']['zero_corr'] is not None]
+    r=float(np.median(valid_corr)) if valid_corr else None
+    delay=float(np.median([v['metrics']['delay_ms'] for v in valid]))
+    conflict=len(set(names))>1
+    detail=(f'Measured {len(valid)} excerpt(s); median zero-lag stereo correlation '
+            f'{r:+.3f} and median strongest short interchannel lag {delay:+.3f} ms. '
+            f'Most common channel classification: {best}. ' +
+            ('Channel behaviour changes between excerpts; see the separate peak/delay plot. ' if conflict else '')+
+            typical['detail'])
+    return {'result':best if not conflict else f'{best} (varies)',
+            'certainty':'Tentative' if conflict else typical['certainty'],
+            'detail':detail,'metrics':{**typical['metrics'],'sampled_sections':len(valid),
+                                      'median_zero_corr':round(r,4) if r is not None else None,
+                                      'median_delay_ms':round(delay,4)}}
+
+
+def _consolidate_tuning(windows):
+    known=[w['tuning'] for w in windows if w.get('tuning',{}).get('metrics',{}).get('deviation_cents') is not None]
+    if not known:
+        return verdict('No coherent tuning clue','Not measurable',
+            'The analyzer could not find a repeatable semitone-grid offset across enough pitched spectral peaks. Percussion and noise do not establish tuning.')
+    measurements=[r['metrics']['deviation_cents'] for r in known]
+    if max(measurements)-min(measurements)>18:
+        return verdict('Tuning varies across excerpts','Unclear',
+            'Pitched-note estimates disagree by more than 18 cents between excerpts; a uniform speed change is not supported.')
+    best=max(known,key=lambda r:r['metrics']['votes'])
+    return {**best,'detail':f'{len(known)} sampled excerpt(s) supported a comparable tuning pattern. '+best['detail']}
+
+
+def _consolidate_wow(windows):
+    measured=[w['wow'] for w in windows if w.get('wow')]
+    if not measured:
+        return verdict('No trackable reference','Not measurable',
+            'No sufficiently prominent, persistent hum, FM pilot or TV-scanning tone could be phase-tracked. Musical vibrato cannot safely substitute for a stable transport reference.')
+    # An apparent change of multiple semitones in a nominal electrical/TV
+    # reference generally indicates an incorrect tone lock or musical masking,
+    # not measurable gentle wow. Do not promote it to a mechanical finding.
+    plausible=[w for w in measured if 0 <= float(w.get('rms_cents',999)) <= 35.0
+               and 0 <= float(w.get('modulation_amplitude_cents',999)) <= 60.0]
+    if not plausible:
+        best=min(measured,key=lambda w:float(w.get('rms_cents',999)))
+        rms=float(best.get('rms_cents',0))
+        return {'result':'Reference pitch track unreliable',
+                'certainty':'Not measurable',
+                'detail':(f'A candidate reference tone varied by {rms:.1f} cents RMS '
+                          'and could not be followed reliably. Such a large deviation may '
+                          'mean the tracker followed musical sound or the wrong harmonic; '
+                          'it is not accepted as evidence of tape/record speed wobble.'),
+                'metrics':{'rejected_rms_cents':round(rms,2),
+                           'candidate_tone_hz':best.get('tone_hz'),
+                           'sampled_sections':len(measured)}}
+    measured=plausible
+    periodic=[w for w in measured if w['result'] in ('Periodic wow','Possible flutter')]
+    if periodic:
+        best=max(periodic,key=lambda w:w['prominence_db'])
+    else:
+        best=max(measured,key=lambda w:w['rms_cents'])
+    info={k:v for k,v in best.items() if k not in ('curve_seconds','curve_cents','mod_freq_hz','mod_power_db')}
+    info['metrics']={k:best[k] for k in ('rms_cents','rate_hz','modulation_amplitude_cents',
+                                         'prominence_db','tone_hz','nominal_hz') if k in best}
+    info['detail']=(f'{len(measured)} of {len(windows)} sampled excerpts provided usable reference-tone tracks. '+info['detail'])
+    return info
+
+def _consolidate_ndr(windows):
+    """Clearly distinguish an observed spectral notch from attribution to NDR.
+
+    An NDR-style notch is a *frequency response* finding, not proof that NDR
+    broadcast the song. Strong repeatability may justify strong confidence in
+    the measured notch while its historical provenance remains unverified.
+    """
+    entries = [w.get('ndr') for w in windows]
+    available = [r for r in entries if r and r.get('freq') is not None]
+    strong = [r for r in available if r.get('supported')]
+    possible = [r for r in available if r.get('possible')]
+    if not strong and not possible:
+        best = max(available, key=lambda r: r.get('depth_db', 0.), default=None)
+        if best:
+            return {
+                'result': 'No confirmed NDR-style 10 kHz dip',
+                'certainty': 'Not detected',
+                'detail': (f'The strongest candidate around {best["freq"]:,.0f} Hz '
+                           f'was {best["depth_db"]:.2f} dB deep, but did not meet '
+                           'the required two-sided depth and/or persistence tests. '
+                           'A smooth high-frequency roll-off is not a notch.'),
+                'metrics': {'notch_candidate_hz': best['freq'],
+                            'notch_depth_db': best['depth_db'],
+                            'notch_sections': 0,
+                            'notch_tested_sections': len(entries)},
+            }
+        return verdict('10 kHz region unavailable', 'Not measurable',
+            'The file lacks enough upper-frequency content for a meaningful two-sided notch measurement.')
+
+    centers = np.array([r['freq'] for r in possible], dtype=float)
+    depths = np.array([r['depth_db'] for r in possible], dtype=float)
+    median_center = float(np.median(centers))
+    best = max(possible, key=lambda r: r['depth_db'])
+    spread = float(np.ptp(centers)) if len(centers) > 1 else 0.0
+    confirmed = len(strong) >= 2 and len(possible) >= 2
+    certainty = 'High' if confirmed else 'Possible' if strong else 'Tentative'
+    return {
+        'result': 'NDR-style 10 kHz dip detected',
+        'certainty': certainty,
+        'detail': (f'A repeated dip near {median_center:,.0f} Hz measures '
+                   f'{float(np.median(depths)):.2f} dB below nearby frequencies '
+                   f'(strongest: {best["depth_db"]:.2f} dB). '
+                   f'Detected in {len(possible)} of {len(entries)} sampled sections '
+                   f'({len(strong)} high-strength). The measured centres vary '
+                   f'by {spread:.0f} Hz. This is an observable filter notch, not '
+                   'proof the recording was broadcast on NDR.'),
+        'metrics': {'notch_median_hz': round(median_center, 2),
+                    'notch_depth_db': round(float(best['depth_db']), 2),
+                    'notch_sections': len(possible),
+                    'notch_tested_sections': len(entries),
+                    'notch_occurrence_percent': round(float(best['occurrence'])*100, 1)},
+    }
+
+def _stereo_format(windows, channels):
+    if channels == 1:
+        return verdict("Mono", "High", "The uploaded audio has one channel; the original studio may differ.")
+    values = [w["stereo_corr"] for w in windows if w.get("stereo_corr") is not None]
+    if not values:
+        return verdict("Cannot assess", "Not measurable", "Low channel levels prevent stereo measurement.")
+    if float(np.median(values)) >= .998:
+        return verdict("Dual mono / near-mono", "High", "Two channels are nearly identical.")
+    return verdict("Stereo", "High", "The uploaded channels differ measurably.")
+
+def _dropout_candidates(audio):
+    """Count brief near-silent interruptions, without inferring tape origin."""
+    block = int(SAMPLE_RATE * .05)
+    n = len(audio) // block
+    if n < 100:
+        return 0
+    frames = audio[:n * block].reshape(n, block, 2).astype(float)
+    rms = np.sqrt(np.mean(frames * frames, axis=(1, 2)))
+    typical = ndimage.median_filter(rms, size=41, mode="reflect")
+    quiet = (rms < typical * .10) & (typical > .003)
+    labels, count = ndimage.label(quiet)
+    found = 0
+    for idx in range(1, count + 1):
+        points = np.flatnonzero(labels == idx)
+        if not 2 <= len(points) <= 12:
+            continue
+        first, last = int(points[0]), int(points[-1])
+        if first < 2 or last + 3 >= n:
+            continue
+        if rms[first-2:first].mean() > typical[first] * .55 and \
+           rms[last+1:last+3].mean() > typical[last] * .55:
+            found += 1
+    return found
+
+
+def _pilot_variation_hz(audio):
+    """Estimate frequency scatter of a strong 19 kHz tone, without diagnosing tape speed."""
+    mono = np.mean(audio, axis=1, dtype=np.float64)
+    n = int(SAMPLE_RATE * 2)
+    if len(mono) < n * 5:
+        return None
+    freqs = np.fft.rfftfreq(n, d=1/SAMPLE_RATE)
+    band = (freqs >= 18960) & (freqs <= 19040)
+    positions = np.where(band)[0]
+    estimates = []
+    for start in range(0, len(mono) - n + 1, n):
+        chunk = mono[start:start+n]
+        fft = np.abs(np.fft.rfft(chunk * np.hanning(n)))
+        j = positions[np.argmax(fft[band])]
+        surrounding = np.concatenate((fft[max(0,j-30):max(0,j-9)], fft[j+10:j+31]))
+        if len(surrounding) < 15 or fft[j] < max(float(np.median(surrounding)) * 10, 1e-8):
+            continue
+        # Parabolic refinement of peak location.
+        if 1 <= j < len(fft)-1:
+            y = np.log(np.maximum(fft[j-1:j+2], 1e-15))
+            denom = y[0] - 2*y[1] + y[2]
+            correction = .5 * (y[0] - y[2]) / denom if abs(denom) > 1e-12 else 0.0
+            correction = float(np.clip(correction, -.5, .5))
+        else:
+            correction = 0.0
+        estimates.append((j + correction) * SAMPLE_RATE / n)
+    if len(estimates) < 6:
+        return None
+    values = np.asarray(estimates)
+    return float(np.median(np.abs(values - np.median(values))) * 1.4826)
+
+
+def _bandwidth_window(audio, original_rate):
+    """Describe high-frequency *content*, not a proven recording format.
+
+    Uses broad frequency bands and median spectral energy to avoid treating
+    a single TV scan line / FM pilot as full-range audio. Always respect the
+    original sample-rate Nyquist ceiling.
+    """
+    ceiling = min(20000.0, original_rate / 2.0)
+    if ceiling < 4500:
+        return None
+    measures = []
+    for ch in range(audio.shape[1]):
+        data = audio[:, ch].astype(np.float64)
+        if float(np.mean(data**2)) < 1e-12:
+            continue
+        f, power = signal.welch(data, fs=SAMPLE_RATE, nperseg=8192,
+                                noverlap=4096, scaling='density', average='median')
+        # 250-Hz bands: robust against narrow spikes such as a 15,734-Hz tone.
+        bins = np.arange(0, ceiling + 250, 250.0)
+        hz = []; energy = []
+        for left, right in zip(bins[:-1], bins[1:]):
+            inside = (f >= left) & (f < right)
+            if np.count_nonzero(inside) < 8:
+                continue
+            hz.append((left+right)/2)
+            energy.append(float(np.median(power[inside])))
+        if len(hz) < 18:
+            continue
+        hz = np.asarray(hz)
+        log = 10 * np.log10(np.maximum(energy, 1e-23))
+        reference = float(np.percentile(log[(hz>=1500)&(hz<=5500)], 75))
+        rel = log-reference
+        meaningful = (hz >= 4000)&(rel > -47)
+        end = float(hz[meaningful][-1] + 125) if np.any(meaningful) else None
+        if end is None:
+            continue
+        # Compare ranges either side of an FM-style filter, but only if both
+        # sides are actually measurable and the lower side has some energy.
+        before = rel[(hz>=12500)&(hz<14750)]
+        after = rel[(hz>=16000)&(hz<18000)]
+        fm_drop = (float(np.median(before)-np.median(after))
+                   if len(before)>=4 and len(after)>=4 else None)
+        sharp_fm = (fm_drop is not None and fm_drop>=18 and
+                    float(np.median(before)) > -44 and float(np.median(after)) < -24)
+        if sharp_fm:
+            baseline=float(np.median(before[(len(before)//3):]))
+            crossings = np.where((hz>=13750)&(hz<=18500)&(rel<=baseline-11))[0]
+            if len(crossings):
+                end=float(hz[crossings[0]]-125)
+        measures.append({'range_khz': round(min(end,ceiling)/1000,1),
+                         'sharp_fm': sharp_fm,
+                         'drop_db': round(fm_drop,1) if fm_drop is not None else None})
+    if not measures:
+        return None
+    # Choose the more extended channel; preserve evidence from either channel.
+    return max(measures, key=lambda item: (item['range_khz'], item['sharp_fm']))
+
+
+def _bandwidth_verdict(windows, metadata, broadcast):
+    features=[w['bandwidth_feature'] for w in windows if w.get('bandwidth_feature')]
+    if not features:
+        return verdict('No range clue','Not measurable','Not enough usable high-frequency sound to measure.')
+    limit=metadata['input_rate']/2000
+    cutoff=float(np.median([w['range_khz'] for w in features]))
+    sharp=sum(bool(w['sharp_fm']) for w in features)>=max(1,math.ceil(len(features)*0.5))
+    fm_present='FM radio pilot' in broadcast.get('result','') and broadcast.get('certainty') in ('High','Possible','Tentative')
+    bitrate=metadata.get('file_history',{}).get('facts',{}).get('bitrate_kbps')
+    mp3_compressed=(metadata['codec']=='mp3' and bitrate is not None and bitrate<=160)
+    # Not all high-frequency limits are broadcast filters: sample Nyquist,
+    # lossy encoding, tape copying, and an authentic FM low-pass differ.
+    # Keep the measured evidence for the plotted source report.
+    feature_metrics={
+        'estimated_cutoff_khz':round(cutoff,2),
+        'nyquist_khz':round(limit,2),
+        'sharp_sections':sum(bool(w['sharp_fm']) for w in features),
+        'tested_sections':len(features),
+        'median_15khz_drop_db':round(float(np.median([w['drop_db'] for w in features if w.get('drop_db') is not None])),1)
+            if any(w.get('drop_db') is not None for w in features) else None,
+        'codec_bitrate_kbps':bitrate,
+    }
+    def with_measurements(report):
+        report['metrics']=feature_metrics
+        return report
+    if limit < 18 and cutoff >= limit-1.2:
+        return with_measurements(verdict(f'Sample rate limits audio to ~{limit:g} kHz','High',
+            f'This file cannot contain frequencies above {limit:g} kHz because of its sampling rate. Not proof of the original source.'))
+    if sharp and 13.5<=cutoff<=17.5:
+        if fm_present:
+            return with_measurements(verdict(f'FM-like cutoff (~{cutoff:g} kHz)','Possible',
+                f'Sound drops sharply around {cutoff:g} kHz and an FM pilot was found. Both fit an FM radio transfer.'))
+        if mp3_compressed:
+            return with_measurements(verdict(f'MP3-like cutoff (~{cutoff:g} kHz)','Possible',
+                f'A sharp drop around {cutoff:g} kHz fits low-bitrate MP3 filtering ({bitrate} kbps). FM is another possibility.'))
+        return with_measurements(verdict(f'Sharp cutoff (~{cutoff:g} kHz)','Possible',
+            f'Sound drops abruptly around {cutoff:g} kHz. FM broadcast or digital filtering could cause this.'))
+    if cutoff<=10.5:
+        return with_measurements(verdict(f'Narrow range (~{cutoff:g} kHz)','Possible',
+            f'Little sound energy survives above {cutoff:g} kHz. Older tape, radio, filtering or MP3 compression could explain it.'))
+    if cutoff<=16.5:
+        reason=f'High-frequency sound is weak above roughly {cutoff:g} kHz.'
+        if mp3_compressed:
+            reason+=f' {bitrate} kbps MP3 compression may contribute.'
+        else:
+            reason+=' Tape, radio, older transfers or compression may contribute.'
+        return with_measurements(verdict(f'Limited highs (~{cutoff:g} kHz)','Possible',reason))
+    if cutoff>=18:
+        return with_measurements(verdict(f'Wide range (~{cutoff:g} kHz)','High',
+            f'Energy remains near {cutoff:g} kHz. It could include hiss or crackle, so this does not prove a digital original.'))
+    return with_measurements(verdict(f'Audio reaches ~{cutoff:g} kHz','High',
+        f'Audio/noise energy was measured up to around {cutoff:g} kHz. This alone cannot identify a format.'))
+
+
+def _source_guess(rotation, surface, broadcast, ndr, dropout, bandwidth, meta, stereo=None):
+    """Rank source *clues*, not original-provenance probabilities.
+
+    A digital file may contain a record, tape or broadcast transfer. AM radio
+    has no equivalent of the FM 19 kHz pilot; its guess is necessarily weak.
+    """
+    labels = ('Vinyl / Record', 'Cassette / Tape', 'FM radio', 'AM radio', 'Digital source')
+    scores = {name: 0.25 for name in labels}
+    added = {name: 0.0 for name in labels}
+    facts = []
+
+    def add(label, points, fact):
+        added[label] += points
+        scores[label] += points
+        facts.append(fact)
+
+    sr = str(surface.get('result', '')).lower()
+    rot = str(rotation.get('result', ''))
+    br = str(broadcast.get('result', ''))
+    bw = str(bandwidth.get('result', ''))
+    disc_weight = {'High': 6.5, 'Strong': 6.5, 'Possible': 3.7, 'Tentative': 1.7}
+    if 'crackle' in sr and surface.get('certainty') in disc_weight:
+        add('Vinyl / Record', disc_weight[surface['certainty']],
+            'Sharp, irregular pops and crackle appear between musical sounds: a record-transfer clue.')
+    if 'rpm' in rot.lower() and rotation.get('certainty') in disc_weight:
+        strength = {'High': 5.5, 'Strong': 5.5, 'Possible': 3.0, 'Tentative': 1.2}
+        rpm_match = re.search(r'(33[\u2153]|45|78)\s*RPM', rot, re.I)
+        rpm_label = rpm_match.group(0) if rpm_match else 'record speed'
+        add('Vinyl / Record', strength[rotation['certainty']],
+            f'Sharp clicks repeat at about {rpm_label} timing; percussion can imitate this.')
+    if 'FM radio pilot' in br and broadcast.get('certainty') in disc_weight:
+        weight = {'High': 7.5, 'Strong': 7.5, 'Possible': 5.0, 'Tentative': 2.5}
+        add('FM radio', weight[broadcast['certainty']],
+            'A narrow 19 kHz pilot tone fits a stereo FM broadcast.')
+    if any(k in br for k in ('NTSC', 'PAL', 'SECAM')):
+        facts.append('A TV scanning tone was found. It may be from recording or later copying, not necessarily radio.')
+    if ndr.get('certainty') in ('High', 'Strong', 'Possible', 'Tentative'):
+        add('FM radio', 0.6,
+            'A dip near 10 kHz resembles an old NDR radio-transfer clue, but is not unique to radio.')
+
+    m = re.search(r'(\d+)', str(dropout.get('result', '')))
+    drops = int(m.group(1)) if m else 0
+    if drops >= 2:
+        add('Cassette / Tape', min(3.6, 1.0 + 0.32*drops),
+            f'{drops} brief dropouts could point to damaged tape; digital glitches are another possibility.')
+
+    if 'FM-like cutoff' in bw:
+        add('FM radio', 1.7,
+            'High frequencies stop near 15 kHz, which fits FM broadcasting but can also be compression.')
+    elif 'Sharp cutoff' in bw:
+        facts.append('A sharp high-frequency cutoff could be FM transmission or digital filtering.')
+    elif 'Limited highs' in bw:
+        facts.append('Weak high frequencies can result from tape, radio or digital filtering.')
+    elif 'MP3-like cutoff' in bw:
+        facts.append('The high-frequency limit may come from MP3 encoding; MP3 alone does not identify the original source.')
+    elif 'Wide range' in bw:
+        facts.append('Wide frequency range was measured; record hiss can extend high too.')
+
+    # AM mono broadcasts usually have restricted bandwidth, but similar
+    # cutoffs occur with old tape, telephone and low-bitrate compression.
+    # Never use the current MP3 codec as evidence of an *original* digital source.
+    narrow = re.search(r'Narrow range \(\s*~([0-9.]+) kHz\)', bw)
+    cutoff = float(narrow.group(1)) if narrow else None
+    channels = meta.get('channels')
+    stereo_name = str((stereo or {}).get('result', '')).lower()
+    mono = channels == 1 or stereo_name in ('mono', 'dual mono / near-mono')
+    bitrate = (meta.get('file_history') or {}).get('facts', {}).get('bitrate_kbps')
+    low_bitrate = meta.get('codec') in ('mp3', 'aac', 'opus') and isinstance(bitrate, (int,float)) and bitrate <= 112
+    input_rate = meta.get('input_rate')
+    sample_limited = not isinstance(input_rate, (int,float)) or input_rate < 22050
+    if cutoff is not None and cutoff <= 9.0 and not sample_limited:
+        if low_bitrate:
+            facts.append('The narrow audio range could come from low-bitrate encoding, so AM radio is not a firm guess.')
+        elif mono:
+            add('AM radio', 2.4 if cutoff <= 7.5 else 1.6,
+                f'Audio fades above about {cutoff:g} kHz and is mono, as AM broadcasts often are. Old tape and filters can sound similar.')
+        else:
+            facts.append(f'Audio cuts off near {cutoff:g} kHz; AM is possible, but no mono/broadcast clue supports it.')
+
+    # A clean wide-band file with no identifiable analog/broadcast artifacts
+    # supports a *possible* digital source, not proof it was digitally recorded.
+    if max(added.values()) < 1.0 and 'Wide range' in bw and drops == 0:
+        add('Digital source', 1.4,
+            'The sound reaches high frequencies and no distinctive disc, tape or radio artifact stood out. Even clean analog transfers can do this too.')
+
+    if max(added.values()) <= 0.0:
+        # A source *guess* is requested even when evidence is uninformative.
+        # Never present this default as a positive digital detection or attach
+        # a made-up probability: the source of clean analog transfers is often
+        # unknowable from this file alone.
+        facts.append('No characteristic record pops, tape dropouts, or FM pilot provided a usable source match.')
+        facts.append('Digital is the default low-confidence guess only; a clean record or tape copy could look identical.')
+        return {'result': 'Best guess: Digital source', 'certainty': 'Tentative',
+                'detail': 'No source-specific signature was found. Digital is only a fallback guess, not a measured origin.',
+                'evidence': facts, 'guess_percent': None,
+                'alternative': 'Vinyl / Record or Cassette / Tape', 'fallback_guess': True}
+
+    winner = max(scores, key=scores.get)
+    pct = round(100 * scores[winner] / (sum(scores.values()) + 0.8))
+    points = added[winner]
+    if winner == 'Vinyl / Record':
+        label = 'Likely Vinyl / Record' if points >= 2.5 else 'Possible Vinyl / Record'
+    elif winner == 'Cassette / Tape':
+        label = 'Likely Cassette / Tape' if points >= 2.5 else 'Possible Cassette / Tape'
+    elif winner == 'FM radio':
+        label = 'Likely FM Radio' if points >= 2.4 else 'Possible FM Radio'
+    elif winner == 'AM radio':
+        label = 'Possible AM Radio'  # bandwidth + mono are never definitive
+    else:
+        label = 'Possible Digital Source'
+    strength = ('High' if points >= 6.0 and pct >= 64 else
+                'Possible' if points >= 2.3 else 'Tentative')
+    other = sorted(((k, v) for k,v in scores.items() if k != winner),
+                   key=lambda kv: kv[1], reverse=True)
+    facts.append('Clue scores are rough comparisons, not true odds; one recording may pass through several media.')
+    return {'result': label, 'certainty': strength,
+            'detail': ' '.join(facts), 'evidence': facts,
+            'guess_percent': pct, 'alternative': other[0][0] if other else None}
+
+
+def _diagnostics(windows):
+    clips = [w["clipped"] for w in windows]
+    cutoffs = [w["cutoff"] for w in windows if w["cutoff"]]
+    dropouts = sum(w["dropouts"] for w in windows)
+    pilot = [w["pilot_jitter"] for w in windows if w.get("pilot_jitter") is not None]
+    return {"near_full_scale_percent": round(float(np.mean(clips) * 100), 3),
+            "spectral_upper_energy_khz": round(float(np.median(cutoffs)) / 1000, 1) if cutoffs else None,
+            "possible_interruptions": dropouts,
+            "pilot_frequency_scatter_hz": round(float(np.median(pilot)),2) if pilot else None,
+            "sampled_sections": len(windows)}
+
+def analyze_path(path, file_name=None, *, charts=False):
+    """Read selected portions of a 4--300 second file, return (rows, metadata)."""
+    path = Path(path)
+    if path.suffix.lower() not in EXTENSIONS:
+        raise ValueError("Upload MP3, MPEG audio, WAV, FLAC, OGG or M4A audio.")
+    if path.stat().st_size > MAX_BYTES:
+        raise ValueError("Maximum file size is 100 MB.")
+    metadata = _probe(path)
+    optional_issues = []
+
+    def guarded(stage, operation, fallback):
+        try:
+            return operation()
+        except Exception as exc:
+            LOGGER.exception("Optional audio check failed: %s", stage)
+            optional_issues.append(f"{stage}: {type(exc).__name__}")
+            return fallback
+
+    metadata["file_history"] = guarded(
+        "digital file history", lambda: inspect_file(path, metadata),
+        {**verdict("History unavailable", "Not measurable", "File-history parsing failed."), "facts":{}})
+    metadata["embedded_metadata"] = guarded(
+        "metadata tags", lambda: inspect_metadata(path, metadata),
+        {"result":"Tags unavailable", "certainty":"Not measurable", "tags":[],
+         "detail":"The file's metadata fields could not be read."})
+    metadata["rds"] = guarded(
+        "RDS inspection", lambda: inspect_rds(path, metadata, metadata["embedded_metadata"]),
+        {"result":"RDS inspection unavailable", "certainty":"Not measurable", "metrics":{},
+         "detail":"RDS inspection was unavailable for this recording."})
+    analyzed = []
+    plot_sections = [] if charts else None
+    analyzed_seconds = 0.0
+    analyzed_intervals = []
+    for start, seconds in _windows(metadata["duration"]):
+        audio = _decode_window(path, start, seconds)
+        if np.sqrt(float(np.mean(audio * audio))) < 1e-6:
+            continue
+        mains, air, cutoff = _spectrum_window(audio, metadata["input_rate"])
+        a, b = audio[::60].T
+        stereo_corr = (float(np.corrcoef(a,b)[0,1])
+                       if np.std(a) > 1e-6 and np.std(b) > 1e-6 else None)
+        fm = air.get("FM stereo pilot")
+        pilot_jitter = (guarded("pilot stability", lambda: _pilot_variation_hz(audio),None)
+                        if fm and fm["pass"] and fm.get("persistent") else None)
+        phase = guarded("phase", lambda: stereo_phase(audio, metadata['channels']), None)
+        tuning = guarded("musical tuning", lambda: pitch_tuning(audio), {})
+        preview = {'mains':mains,'broadcast':air}
+        refs = guarded("reference frequencies", lambda: reference_candidates([preview]), [])
+        refs.sort(key=lambda r:(r['reference_grade'],r['prominence_db']),reverse=True)
+        wobble = (guarded("wow/flutter", lambda: track_reference_tone(
+                      audio,refs[0]['observed'],refs[0]['nominal'],refs[0]['prominence_db']), None)
+                  if refs else None)
+        analyzed.append({
+            "vinyl": guarded("vinyl rotation",lambda: _vinyl_window(audio),None),
+            "surface":guarded("surface noise",lambda: _surface_noise_window(audio),
+                {"quiet_frames":0,"crackly_frames":0,"frames":0,"clicks":0,
+                 "quiet_clicks":0,"irregular":False,"high_frequency_ratio":0.0}),
+            "hiss":guarded("background hiss",lambda:_hiss_window(audio,metadata["input_rate"]),None),
+            "mains":mains,"broadcast":air,"cutoff":cutoff,
+            "bandwidth_feature":guarded("audio bandwidth",lambda: _bandwidth_window(
+                                     audio,metadata["input_rate"]),None),
+            "dropouts":guarded("audio dropouts",lambda: _dropout_candidates(audio),0),
+            "clipped":float(np.mean(np.abs(audio) >= .998)),
+            "pilot_jitter":pilot_jitter,"stereo_corr":stereo_corr,
+            "phase":phase,"tuning":tuning,"wow":wobble,
+            "ndr":guarded("10 kHz notch",lambda: _ndr_notch_window(
+                    audio,metadata["input_rate"]),None)})
+        if charts:
+            # Bounded real excerpts; retained temporarily only until plots render.
+            # Use a centred part of each sampled section so every chosen clue can
+            # display evidence from its own window, not an unrelated excerpt.
+            preview_len = min(len(audio), SAMPLE_RATE * 18)
+            offset = max(0, (len(audio) - preview_len) // 2)
+            plot_sections.append({
+                "audio": audio[offset:offset + preview_len].copy(),
+                "start": start + offset / SAMPLE_RATE,
+                "mains": mains, "broadcast": air,
+                "ndr": analyzed[-1]["ndr"],
+                "phase":phase, "tuning":tuning, "wow":wobble,
+            })
+        analyzed_seconds += len(audio)/SAMPLE_RATE
+        analyzed_intervals.append((start, len(audio)/SAMPLE_RATE))
+        del audio # Avoid keeping 100+ MB of decoded audio in RAM.
+    if not analyzed:
+        raise ValueError("The audio was silent or too faint to analyze.")
+    rotation = _consolidate_vinyl(analyzed)
+    surface = _consolidate_surface(analyzed)
+    electrical = _consolidate_electrical(analyzed)
+    broadcast = _consolidate_broadcast(analyzed)
+    ndr = _consolidate_ndr(analyzed)
+    hiss = _consolidate_hiss(analyzed)
+    pilot = _consolidate_fm_pilot(analyzed,metadata['input_rate'])
+    phase_summary = _consolidate_phase(analyzed,metadata['channels'])
+    tuning_summary = _consolidate_tuning(analyzed)
+    speed = speed_assessment(analyzed,tuning_summary)
+    wow_summary = _consolidate_wow(analyzed)
+    diag = _diagnostics(analyzed)
+    # Source guess combines measured disc/tape/FM/bandwidth clues rather than
+    # duplicating surface crackle and dropouts as primary result cards.
+    interruption_count = diag['possible_interruptions']
+    dropout = (verdict(f'{interruption_count} brief interruptions', 'Tentative',
+                       'Short losses in sound; not specific to tape.')
+               if interruption_count else verdict('None found', 'Not detected', 'No brief interruptions.'))
+    bandwidth = _bandwidth_verdict(analyzed, metadata, broadcast)
+    stereo = _stereo_format(analyzed, metadata['channels'])
+    source = score_origin(rotation=rotation, surface=surface, broadcast=broadcast,
+                         pilot=pilot, ndr=ndr, dropout=dropout, bandwidth=bandwidth,
+                         metadata=metadata, stereo=stereo, phase=phase_summary,
+                         wow=wow_summary, power=electrical, speed=speed,
+                         rds=metadata["rds"], hiss=hiss)
+    # The frequency response supports the source guess, not an independent origin.
+    source["frequency_clue"] = bandwidth
+    rows=[
+        ('Likely audio source',source),
+        ('Vinyl rotation',rotation),
+        ('Likely power system',electrical),
+        ('Radio / TV signals',broadcast),
+        ('FM stereo pilot',pilot),
+        ('NDR-style 10 kHz dip',ndr),
+        ('Disc surface noise',surface),
+        ('Background hiss',hiss),
+        ('Possible tape dropouts',dropout),
+        ('Playback speed',speed),
+        ('Pitch / musical tuning',tuning_summary),
+        ('Wow and flutter',wow_summary),
+        ('Stereo phase / delay',phase_summary),
+        ('Audio bandwidth',bandwidth),
+        ('Digital file history',metadata['file_history']),
+        ('Embedded metadata',metadata['embedded_metadata']),
+        ('RDS / RadioText',metadata['rds']),
+        ('Stereo format',stereo),
+    ]
+    guarded("measured descriptions",lambda: enrich_findings(rows, analyzed, metadata, analyzed_intervals),None)
+    if charts:
+        def build_charts():
+            from spectrograms import make_evidence_charts
+            return make_evidence_charts(plot_sections, rows, metadata["input_rate"])
+        metadata["spectrograms"] = guarded("evidence graphs", build_charts,{})
+        plot_sections.clear()  # Do not preserve decoded audio beyond this call.
+    metadata["nonfatal_issues"] = optional_issues
+    metadata["analyzer_version"] = ANALYZER_VERSION
+    metadata["notch_detector_version"] = NOTCH_DETECTOR_VERSION
+    metadata["ndr_screening"] = [
+        {"start_seconds": round(start, 1),
+         "centre_hz": (measure or {}).get("freq"),
+         "depth_db": (measure or {}).get("depth_db"),
+         "qualifying": bool(measure and measure.get("possible"))}
+        for (start, _), measure in zip(analyzed_intervals, (w.get("ndr") for w in analyzed))
+    ]
+    metadata["analyzed_seconds"] = round(analyzed_seconds, 1)
+    metadata["sampled_intervals"] = [{"start_seconds": round(a, 2), "duration_seconds": round(b, 2)} for a,b in analyzed_intervals]
+    metadata["file_size_bytes"] = path.stat().st_size
+    metadata["diagnostics"] = diag
+    metadata.pop("stream_tags", None)
+    metadata.pop("format_tags", None)
+    return rows, metadata
+
+def analyze(data: bytes, filename: str, *, charts=False):
+    """Bytes-oriented API wrapper; temporary file is always removed."""
+    ext = Path(filename).suffix.lower()
+    if ext not in EXTENSIONS:
+        raise ValueError("Upload MP3, MPEG audio, WAV, FLAC, OGG or M4A audio.")
+    if len(data) > MAX_BYTES:
+        raise ValueError("Maximum file size is 100 MB.")
+    with tempfile.TemporaryDirectory(prefix="audiocheck_") as tempdir:
+        path = Path(tempdir) / ("upload" + ext)
+        path.write_bytes(data)
+        return analyze_path(path, filename, charts=charts)

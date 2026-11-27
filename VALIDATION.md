@@ -1,28 +1,29 @@
-# AudioCheQ v2.6.0 verification
+# AudioCheQ v2.7.0 validation
 
-## Regressions
+## Automated tests
 
-- 61 audio-analysis tests passed.
-- 48 file-format, metadata, RDS, chart and new-feature tests passed.
-- 51 UI, upload-flow, startup, display-safety and ranking tests passed.
-- Total: 160 passing tests, run in three groups.
-- A versioned engine import test confirms app.py binds to audiocheq_engine_v260.py, not an older `analyzer.py`.
+167 tests collected across 24 test files. All tests passed when run in independent groups, including seven new v2.7.0 tests. The groups cover the analyzer, NDR notch, synthetic hiss, origin gating/weights, user interface, upload clearing, startup versioning, file-format metadata, RDS, graphics and defensive error handling. The full combined suite was not completed as one run because one long batch exceeded the execution limit; all test files were covered by smaller passing runs.
 
-## Supplied recording checks (local, not on Streamlit Cloud)
+## Four existing real recordings (local, not Streamlit Cloud)
 
-| Recording | NDR 10 kHz feature | Top path | Heuristic confidence | Cutoff measurement |
-|---|---|---|---:|---:|
-| TMS from Compilation A.mp3 | Detected around 10,298 Hz | FM-related | 71% | 16.0 kHz |
-| N01-21-11-01_tape-2_TMS.mp3 | Detected around 9,931 Hz | FM-related | 71% | 16.0 kHz |
-| Everyone_Knows_That.mp3.mpeg | Full 10 kHz region unavailable | Possible TV/video-related | 60% | 16.0 kHz |
-| Historical Hysterics Rag MP3 | No confirmed NDR dip | Vinyl | 79% | 18.2 kHz |
+| Recording | 10 kHz notch | Origin verdict | Other clues |
+|---|---|---|---|
+| TMS from Compilation A MP3 | Detected ~10,312 Hz (2/3 qualifying sections) | Possible FM path, ~60% heuristic confidence | Cutoff ~16.0 kHz; no reliable standalone hiss detection |
+| N01-21-11-01 tape-2 TMS MP3 | Detected ~9,931 Hz (4/4) | Possible FM path, ~61% heuristic confidence | Cutoff ~16.0 kHz; possible background hiss in quieter parts |
+| Everyone Knows That MP3 | No usable 10 kHz notch | Possible TV/video-related stage | 15,734 Hz scanning line; codec-limited treble cutoff, not promoted to FM |
+| Historical Hysterics Rag MP3 | No confirmed notch | Likely vinyl/record (~76% heuristic confidence) | Disc surface crackle, some RPM pattern and background noise |
 
-All four recordings completed without an optional-check TypeError. The two NDR recordings generated **real** hum, cutoff and notch spectrogram PNGs alongside the earlier peak plots, each below the inline encoded-graphic size limit. The same files were used to check that charts show the measured feature as an outline and do not paint reference lines through the evidence.
+All four completed without an optional forensic check error. These are *recording-path* hypotheses, not authentication of the original studio medium.
 
-## Responsive visual checks
+## Targeted synthetic checks
 
-Chrome/Chromium static HTML previews generated from the actual app CSS and result-card renderer: 1440 px desktop, 850 px tablet, 390 px phone. No horizontal overflow was observed. Desktop displayed the source card at full width and subsequent cards in two columns. Tablet and phone were one-column layouts. Note this is a **static browser check**, not a live Streamlit session.
+- Strong 19 kHz pilot plus measured ~15 kHz cutoff can produce a high-confidence FM result.
+- FM pilot alone, NDR notch alone, weak cutoff, and codec-limited 90 kbps MP3 **cannot** produce an FM verdict.
+- Repeated hiss, dropouts and credible flutter can outweigh competing FM evidence; near-45-RPM periodic wow supports vinyl with corroborating crackle.
+- Broadband noise-only or an implausible pitch track does not falsely become record-speed wow.
+- A generated intermittent-music recording with continuous noise reveals broadband hiss in quiet passages; a steady pure tone does not.
+- Positive NDR recordings retained; unrelated controls remained negative.
 
-## Known limits
+## UI check
 
-Origin percentages are heuristic and the 10 kHz filter clue is not unique to NDR or FM. Raw-RDS decoder installation and the live Streamlit deployment were not verified in this environment. Tests do not ship the audio sources.
+Static HTML assembled from the app's actual card functions/CSS was displayed in Chromium at 1440 px desktop and 390 px phone widths for both NDR and vinyl examples. Origin card spans the page width; other cards appear in two desktop columns and one mobile column. Both sizes had no horizontal overflow, with 17 result cards. This is a static CSS check, not a live hosted Streamlit session.
