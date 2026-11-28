@@ -24,7 +24,7 @@ from origin_fusion import score_origin
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
 
-ANALYZER_VERSION = "2.7.1"
+ANALYZER_VERSION = "2.7.2"
 NOTCH_DETECTOR_VERSION = "2.7-stricter-two-shoulders"
 LOGGER = logging.getLogger("audiocheq.analyzer")
 

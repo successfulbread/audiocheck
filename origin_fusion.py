@@ -96,7 +96,7 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
     hiss_result = str(hiss.get('result', '')).lower()
     if hiss.get('certainty') in USABLE and 'hiss' in hiss_result and 'no ' not in hiss_result:
         strength = 'specific' if hiss.get('certainty') in CONFIRMED else 'support'
-        w = 4.1 if hiss.get('certainty') in CONFIRMED else 2.3 if hiss.get('certainty')=='Possible' else 1.1
+        w = 4.8 if hiss.get('certainty') in CONFIRMED else 2.8 if hiss.get('certainty')=='Possible' else 1.3
         pers = _number(hm.get('persistent_percent'))
         level = _number(hm.get('quiet_hiss_dbfs'))
         pieces = []
@@ -104,15 +104,15 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
         if level is not None: pieces.append(f'around {level:.0f} dBFS')
         at = ' ('+', '.join(pieces)+')' if pieces else ''
         add('Cassette / Tape',w,'A sustained broadband hiss-like noise floor'+at+' is consistent with tape copying, but not unique to cassette.',strength)
-        add('Vinyl / Record', .55 if w>=3 else .25, 'Records and analog transfers can also retain broadband background hiss.')
+        add('Vinyl / Record', .35 if w>=3 else .20, 'Records and analog transfers can also retain broadband background hiss.')
 
     # Intermittent losses favour tape; a few cuts could instead be an edit.
     drops_match = re.search(r'(\d+)', str(dropout.get('result','')))
     drops = int(drops_match.group(1)) if drops_match else 0
     if drops >= 2:
-        add('Cassette / Tape', min(4.6, 2.3 + .32*drops),
+        add('Cassette / Tape', min(5.4, 2.6 + .40*drops),
             f'{drops} brief sound dropouts can be caused by damaged or poorly contacting tape.',
-            'specific' if drops >= 4 else 'support')
+            'specific' if drops >= 3 else 'support')
 
     wm = wow.get('metrics') or {}
     wobble_cents = _number(wm.get('rms_cents'))
@@ -128,11 +128,11 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
                          ('45 RPM', .75), ('78 RPM', 1.30))
                         if abs(wobble_rate-hz)/hz <= .045), None)
         if matched and wobble_rate <= 1.45:
-            add('Vinyl / Record', 4.3 if wow.get('certainty') in CONFIRMED else 3.0,
+            add('Vinyl / Record', 4.9 if wow.get('certainty') in CONFIRMED else 3.4,
                 f'Pitch wobbles about {wobble_rate:.3f} times per second, near the {matched[0]} rotation rate; an off-centre record can do this.', 'specific')
-            add('Cassette / Tape', .7, 'Tape transports can also produce regular pitch wobble.')
+            add('Cassette / Tape', .5, 'Tape transports can also produce regular pitch wobble.')
         else:
-            weight = 3.3 if wow.get('certainty') in CONFIRMED else 2.5
+            weight = 3.9 if wow.get('certainty') in CONFIRMED else 2.9
             add('Cassette / Tape', weight,
                 f'The measured pitch varies {wobble_cents:.1f} cents RMS at {wobble_rate:.2f} cycles/second, consistent with mechanical tape-transport instability.',
                 'specific' if wow.get('certainty') in CONFIRMED else 'support')

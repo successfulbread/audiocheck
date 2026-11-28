@@ -1,6 +1,14 @@
-# AudioCheQ v2.7.0 — Analog-first origin analysis
+# AudioCheQ v2.7.2 — Memory and upload reliability
 
 AudioCheQ is a Streamlit audio-forensic investigation app for recordings up to five minutes. It examines vinyl/shellac transfer clues, tape hiss, dropouts, transport speed variations, FM/TV/electrical interference, the historic 10 kHz broadcast notch, pitch, file metadata and optional raw-RDS captures.
+
+## What changed in v2.7.2
+
+- Uploads are copied to a temporary disk file in 1 MiB chunks; the local upload handle is closed before decoding. The picker resets after success or failure. Reset upload / clear results is also available manually.
+- The previous report is dropped before analysis. One analysis per Python process is permitted at a time; a second user can retry after the first finishes.
+- Graph previews are temporarily stored on disk and loaded only for the selected graph. Figures, image buffers and temporary files are explicitly cleaned up.
+- Optional graph failures do not trigger a second full analysis. Upload receipt and current Linux resident memory are logged at analysis boundaries. The 100 MB / 5 minute limits are unchanged.
+- The origin-scoring, notch detector and existing layout are unchanged. Include the matching origin_fusion.py and reboot Streamlit after uploading the update.
 
 ## What changed in v2.7.0
 
@@ -14,9 +22,9 @@ AudioCheQ is a Streamlit audio-forensic investigation app for recordings up to f
 ## Install / update Streamlit Cloud
 
 1. Download the complete ZIP and **extract it**.
-2. Upload its **contents** to the root of the GitHub repository configured for Streamlit. Replace existing copies of `app.py`, `analyzer.py`, `origin_fusion.py`, and `observations.py`, and **add** `audiocheq_engine_v270.py`. Keep all remaining library files alongside them.
+2. Upload the update ZIP **contents** to the GitHub repository root. Replace `app.py`, `analyzer.py`, `audiocheq_engine_v270.py`, `spectrograms.py`, and `origin_fusion.py`; add `upload_runtime.py`. Keep all remaining library files alongside them.
 3. Commit to the actual deployed branch. In Streamlit Cloud, select **Manage app → Reboot app**.
-4. Confirm the heading reads **v2.7.0**, and that a *freshly uploaded* report says **Analyzed with engine: 2.7.0**. Re-upload a recording if the old report remains in session state.
+4. Confirm the heading reads **v2.7.2**, and that a *freshly uploaded* report says **Analyzed with engine: 2.7.2**. Re-upload a recording if the old report remains in session state.
 
 For a clean v2.6.0 installation, the five-file update ZIP is sufficient; otherwise prefer the full project.
 

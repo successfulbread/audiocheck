@@ -1,3 +1,7 @@
+# AudioCheQ v2.7.2 reliability validation
+
+42 targeted tests passed locally (upload state, concurrency, temp-file cleanup, graph cleanup and failure, engine startup, spectrograms, hiss, NDR and layout). The complete suite was not completed in this environment. Browser/Streamlit Community Cloud behavior and long-term server RSS have not been verified. The actual host may retain uploaded bytes until widget cleanup and Python/native allocators may retain freed memory.
+
 # AudioCheQ v2.7.0 validation
 
 ## Automated tests

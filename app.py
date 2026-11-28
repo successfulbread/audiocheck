@@ -1,4 +1,4 @@
-"""AudioCheQ v2.7.1 - integrated source evidence and readable forensic findings."""
+"""AudioCheQ v2.7.2 - refined analog differentiation, safer uploads and clearer explanations."""
 from __future__ import annotations
 
 import html
@@ -10,8 +10,8 @@ import gc
 
 import streamlit as st
 
-APP_VERSION = "2.7.1"
-st.set_page_config(page_title="AudioCheQ v2.7.1 | Find the clues", page_icon=":material/graphic_eq:", layout="wide", initial_sidebar_state="collapsed")
+APP_VERSION = "2.7.2"
+st.set_page_config(page_title="AudioCheQ v2.7.2 | Find the clues", page_icon=":material/graphic_eq:", layout="wide", initial_sidebar_state="collapsed")
 
 # Load this release's uniquely named engine from the SAME directory as app.py.
 # This avoids a stale analyzer.py left in GitHub or an unrelated `analyzer`
@@ -20,9 +20,9 @@ st.set_page_config(page_title="AudioCheQ v2.7.1 | Find the clues", page_icon=":m
 import importlib.util
 ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v270.py")
 if not ENGINE_PATH.is_file():
-    st.error("AudioCheQ v2.7.1 is missing its audio engine file.")
+    st.error("AudioCheQ v2.7.2 is missing its audio engine file.")
     st.write("Missing: **audiocheq_engine_v270.py** beside **app.py**.")
-    st.info("Upload the matching files from the v2.7.1 update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
+    st.info("Upload the matching files from the v2.7.2 update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
     st.stop()
 try:
     _spec = importlib.util.spec_from_file_location("audiocheq_engine_v270", ENGINE_PATH)
@@ -31,7 +31,7 @@ try:
     _engine = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_engine)
 except Exception as exc:
-    st.error("AudioCheQ could not load its v2.7.1 audio engine.")
+    st.error("AudioCheQ could not load its v2.7.2 audio engine.")
     st.code(f"{type(exc).__name__}: {exc}", language="text")
     st.write(f"Engine file: `{ENGINE_PATH.name}`")
     st.info("Check that the complete ZIP contents are in the repository root and that Streamlit has finished installing packages.txt and requirements.txt.")
@@ -46,7 +46,7 @@ if _analyzer_loaded != APP_VERSION or _missing_exports:
     if _missing_exports:
         st.write("Missing engine fields: " + ", ".join(_missing_exports))
     st.write(f"Loaded engine file: `{ENGINE_PATH.name}`")
-    st.info("Replace app.py and audiocheq_engine_v270.py together from the v2.7.1 update ZIP, then reboot the app.")
+    st.info("Replace app.py and audiocheq_engine_v270.py together from the v2.7.2 update ZIP, then reboot the app.")
     st.stop()
 
 MAX_BYTES = _engine.MAX_BYTES
@@ -63,14 +63,14 @@ html, body, .stApp {font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-se
 .stApp {background:linear-gradient(165deg,#101827 0%,#151329 60%,#101827 100%);color:#F2F6FF;}
 .block-container {max-width:1280px;padding-top:1.1rem;padding-bottom:3rem;}
 header[data-testid="stHeader"] {background:transparent;}
-.ac-hero {position:relative;overflow:hidden;background:linear-gradient(111deg,#4F46E5 0%,#9333EA 54%,#E34E83 100%);
- border:1px solid #B9A3FF;border-radius:24px;box-shadow:0 16px 32px #03071355;padding:26px 29px;margin:0 0 20px;}
+.ac-hero {position:relative;overflow:hidden;background:linear-gradient(138deg,#132033 0%,#192942 57%,#102036 100%);
+ border:1px solid #4A5F79;border-radius:24px;box-shadow:0 16px 32px #03071355;padding:26px 29px;margin:0 0 20px;}
 .ac-brand {position:relative;z-index:1;font-size:clamp(2.3rem,6vw,3.4rem);line-height:1.09;letter-spacing:-.05em;
- font-weight:900;color:#FFFFFF;margin:0 0 8px;text-shadow:0 2px 7px #25144755;}
-.ac-brand span {color:#FFE58F;}
-.ac-intro {position:relative;z-index:1;max-width:620px;font-size:1rem;color:#F9EEFF;margin:0;line-height:1.5;}
-.ac-hero-mark {position:absolute;right:16px;top:12px;width:220px;height:132px;opacity:.75;pointer-events:none;}
-.ac-tagline {position:relative;z-index:1;font-size:1.10rem;font-weight:850;letter-spacing:.01em;color:#FFECB9;margin:0 0 5px;}
+ font-weight:900;color:#FFFFFF;margin:0 0 8px;text-shadow:0 2px 7px #09111c66;}
+.ac-brand span {color:#DDEBFF;}
+.ac-intro {position:relative;z-index:1;max-width:610px;font-size:1rem;color:#E6EEF8;margin:0;line-height:1.5;}
+.ac-hero-mark {position:absolute;right:16px;top:12px;width:360px;height:150px;opacity:.95;pointer-events:none;}
+.ac-tagline {position:relative;z-index:1;font-size:1.03rem;font-weight:850;letter-spacing:.05em;text-transform:uppercase;color:#A8C5E7;margin:0 0 7px;}
 .ac-heading {font-size:1.37rem;font-weight:850;color:#FFFFFF;margin:18px 0 12px;}
 .ac-meta {font-size:.82rem;color:#B7BED2;margin:-3px 0 15px;overflow-wrap:anywhere;}
 .ac-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin-bottom:17px;}
@@ -168,10 +168,10 @@ header[data-testid="stHeader"] {background:transparent;}
  overflow-wrap:anywhere;}
 .ac-file-waiting {font-size:.85rem;color:#C7D2E8;margin:11px 0 13px;}
 @media(max-width:1020px){.ac-grid{grid-template-columns:1fr;gap:11px;}
- .ac-hero{padding:21px 18px}.ac-hero-mark{width:115px;right:2px;top:2px;opacity:.23;}
+ .ac-hero{padding:21px 18px}.ac-hero-mark{width:150px;right:2px;top:8px;opacity:.28;}
  .block-container{padding-top:.55rem}.ac-card{padding:14px 15px 12px;}.ac-top{margin-bottom:8px;}}
 
-.ac-build {position:relative;z-index:1;font-size:.74rem;font-weight:750;color:#FFEDC8;margin-top:12px;letter-spacing:.02em;}
+.ac-build {position:relative;z-index:1;font-size:.74rem;font-weight:750;color:#C9D9EB;margin-top:12px;letter-spacing:.02em;}
 .ac-choices {display:flex;flex-wrap:wrap;gap:6px;margin:5px 0 11px;}
 .ac-choice {font-size:.75rem;font-weight:760;border:1px solid transparent;border-radius:9px;padding:7px 10px;line-height:1.2;white-space:normal;}
 .ac-choice.ac-muted {background:#D8DEEA;color:#718095;border-color:#CCD3E0;opacity:.81;}
@@ -223,19 +223,55 @@ header[data-testid="stHeader"] {background:transparent;}
 """, unsafe_allow_html=True)
 
 st.markdown('''<div class="ac-hero">
-<svg class="ac-hero-mark" aria-hidden="true" viewBox="0 0 240 144" xmlns="http://www.w3.org/2000/svg">
- <defs><linearGradient id="ac-waves" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#A8FFF2"/><stop offset="1" stop-color="#FFE58F"/></linearGradient></defs>
- <rect x="10" y="15" width="215" height="113" rx="20" fill="#170E4A" fill-opacity=".27" stroke="#C9C5FF" stroke-opacity=".40"/>
- <path d="M19 48 L36 48 L43 31 L51 72 L62 21 L72 77 L84 47 L95 48 L105 37 L114 66 L125 40 L133 48 L145 48 L155 27 L164 80 L174 48 L192 48 L202 38 L213 48" fill="none" stroke="url(#ac-waves)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
- <path d="M23 111 L39 104 L52 106 L67 96 L80 101 L96 89 L107 91 L121 106 L135 110 L148 93 L166 87 L182 95 L198 91 L214 81" fill="none" stroke="#FFE58F" stroke-width="2.6" stroke-linecap="round"/>
- <path d="M104 107 L122 120 L137 107" fill="none" stroke="#86FFF0" stroke-width="3" stroke-linecap="round"/>
- <circle cx="122" cy="120" r="3.4" fill="#86FFF0"/>
- <text x="24" y="129" fill="#F3EFFF" font-size="9" font-weight="700" font-family="sans-serif">SIGNAL</text>
- <text x="177" y="129" fill="#F3EFFF" font-size="9" font-weight="700" font-family="sans-serif">10 kHz</text>
+<svg class="ac-hero-mark" aria-hidden="true" viewBox="0 0 380 160" xmlns="http://www.w3.org/2000/svg">
+ <rect x="5" y="8" width="370" height="144" rx="22" fill="#0F1A2A" fill-opacity=".28" stroke="#7589A3" stroke-opacity=".42"/>
+ <g transform="translate(22 25)">
+  <rect width="78" height="48" rx="11" fill="#213246" stroke="#7F93AB"/>
+  <rect x="9" y="10" width="60" height="28" rx="6" fill="#D8E6F4" opacity=".18"/>
+  <circle cx="26" cy="24" r="8" fill="none" stroke="#D8E6F4" stroke-width="2" opacity=".8"/>
+  <circle cx="52" cy="24" r="8" fill="none" stroke="#D8E6F4" stroke-width="2" opacity=".8"/>
+  <path d="M13 24h8 M57 24h8" stroke="#D8E6F4" stroke-width="2" opacity=".8"/>
+ </g>
+ <g transform="translate(112 25)">
+  <rect width="78" height="48" rx="11" fill="#213246" stroke="#7F93AB"/>
+  <circle cx="39" cy="24" r="15" fill="#0F1A2A" stroke="#DCE9F6" stroke-width="2"/>
+  <circle cx="39" cy="24" r="4" fill="#DCE9F6"/>
+  <path d="M53 12q7 11 0 24" fill="none" stroke="#9ADAD4" stroke-width="2"/>
+ </g>
+ <g transform="translate(202 25)">
+  <rect width="78" height="48" rx="11" fill="#213246" stroke="#7F93AB"/>
+  <path d="M10 31 C18 11, 27 41, 35 20 S52 39, 60 17 68 27, 68 27" fill="none" stroke="#F5D98F" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M10 37 H68" stroke="#7893B1" stroke-width="1.5" opacity=".7"/>
+ </g>
+ <g transform="translate(292 25)">
+  <rect width="56" height="48" rx="11" fill="#213246" stroke="#7F93AB"/>
+  <path d="M15 32 L15 18 L24 14 L24 28 Z" fill="#DCE9F6" opacity=".82"/>
+  <path d="M30 31 Q37 15 43 31" fill="none" stroke="#9ADAD4" stroke-width="2.4"/>
+  <path d="M12 38 H44" stroke="#7893B1" stroke-width="1.5" opacity=".7"/>
+ </g>
+ <g transform="translate(22 87)">
+  <rect width="96" height="48" rx="11" fill="#213246" stroke="#7F93AB"/>
+  <rect x="12" y="11" width="31" height="25" rx="5" fill="#DCE9F6" opacity=".20"/>
+  <rect x="53" y="11" width="31" height="25" rx="5" fill="#DCE9F6" opacity=".12"/>
+  <path d="M18 26 h19" stroke="#DCE9F6" stroke-width="2" opacity=".82"/>
+  <path d="M58 17 h20 M58 23 h14 M58 29 h17" stroke="#DCE9F6" stroke-width="2" opacity=".55"/>
+ </g>
+ <g transform="translate(132 87)">
+  <rect width="78" height="48" rx="11" fill="#213246" stroke="#7F93AB"/>
+  <path d="M13 35 L13 23 L26 17 L39 26 L39 35 Z" fill="#DCE9F6" opacity=".16"/>
+  <path d="M47 35 L47 15 L61 21 L61 35 Z" fill="#9ADAD4" opacity=".26"/>
+  <path d="M13 35 H61" stroke="#7893B1" stroke-width="1.5" opacity=".7"/>
+ </g>
+ <g transform="translate(222 87)">
+  <rect width="126" height="48" rx="11" fill="#213246" stroke="#7F93AB"/>
+  <path d="M12 28 H112" stroke="#7893B1" stroke-width="1.4" opacity=".55"/>
+  <path d="M18 33 V23 M31 33 V17 M44 33 V21 M57 33 V14 M70 33 V19 M83 33 V12 M96 33 V24" stroke="#DCE9F6" stroke-width="2" opacity=".8"/>
+  <circle cx="106" cy="20" r="5" fill="#F5D98F"/>
+ </g>
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
-<p class="ac-tagline">Find the story hidden in the sound.</p>
-<p class="ac-intro">Audio forensics for mystery recordings: vinyl, tape, radio, pitch, speed and broadcast fingerprints.</p><div class="ac-build">v2.7.1 &nbsp;·&nbsp; NDR notch detector 2.7</div></div>''', unsafe_allow_html=True)
+<p class="ac-tagline">Audio provenance analysis</p>
+<p class="ac-intro">Professional audio forensics for mystery recordings: source clues from vinyl, cassette, radio, pitch, speed and broadcast filtering.</p><div class="ac-build">v2.7.2 &nbsp;·&nbsp; safer uploads · refined analog clues</div></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -274,17 +310,14 @@ def badge_class(item):
 
 LABELS = {
     'Likely audio source': ('Most likely origin & confidence', '&#9835;'),
+    'Analog wear / transport': ('Analog wear & transport clues', '&#9834;'),
     'NDR-style 10 kHz dip': ('10 kHz broadcast-filter dip', '&#9836;'),
     'Stereo / phase': ('Channels & phase balance', '&#8646;'),
     'Vinyl rotation': ('Record rotation', '&#9673;'),
-    'Disc surface noise': ('Record surface crackle', '&#10022;'),
-    'Background hiss': ('Background hiss / tape noise', '&#8764;'),
-    'Possible tape dropouts': ('Brief sound dropouts', '&#9585;'),
     'Audio bandwidth': ('Frequency range & cutoff', '&#8987;'),
     'Likely power system': ('Electrical hum', '&#9889;'),
     'Radio / TV signals': ('TV scanning signals', '&#9737;'),
     'FM stereo pilot': ('FM stereo pilot (19 kHz)', '&#9687;'),
-    'Wow and flutter': ('Wow / flutter', '&#8767;'),
     'Pitch / musical tuning': ('Musical pitch / tuning', '&#9839;'),
     'Playback speed': ('Playback speed', '&#8635;'),
     'Digital file history': ('Digital file age', '&#128197;'),
@@ -297,6 +330,17 @@ def display_result(key, item):
     item = item if isinstance(item, dict) else {}
     raw = str(item.get('result') or 'Unclear')
     metrics = item.get('metrics') if isinstance(item.get('metrics'), dict) else {}
+    if key == 'Analog wear / transport':
+        if not meaningful(item):
+            return 'No strong analog-wear clue'
+        lower = raw.lower()
+        if 'record-like' in lower:
+            return 'Mostly record-like wear clues'
+        if 'tape-like' in lower:
+            return 'Mostly tape-like wear clues'
+        if 'mixed' in lower:
+            return 'Mixed analog clues'
+        return raw
     if key == 'NDR-style 10 kHz dip':
         if meaningful(item):
             center = metrics.get('notch_median_hz')
@@ -317,6 +361,8 @@ def display_result(key, item):
                 return 'Stereo — channel delay detected'
             return 'Stereo — distinct left/right channels'
         return 'Channel format uncertain'
+    if key == 'Analog wear / transport' and not meaningful(item):
+        return 'No strong analog-wear clue'
     if key == 'Background hiss' and item.get('certainty') == 'Not measurable':
         return 'Not enough quiet audio to measure hiss'
     if key == 'Possible tape dropouts' and not meaningful(item):
@@ -433,6 +479,42 @@ def why(key, item):
                 'A song may pass through several formats before ending up as MP3 or FLAC.')
         return intro+confidence+reasons+ctext+score+fm_rule+fm_status+' '+independent+(' '+str(context[0]) if context else '')+caveat
 
+    if key == 'Analog wear / transport':
+        record_score = number('record_score', 1)
+        tape_score = number('tape_score', 1)
+        hiss_level = number('hiss_level_dbfs', 1)
+        dropouts = m.get('dropouts')
+        wobble_cents = number('wobble_cents', 2)
+        wobble_rate = number('wobble_rate_hz', 2)
+        record_clues = m.get('record_clues') or []
+        tape_clues = m.get('tape_clues') or []
+        practical = []
+        if 'surface crackle' in ' '.join(record_clues).lower():
+            practical.append('Irregular crackle points more toward a disc surface than a cassette shell.')
+        if hiss_level is not None:
+            practical.append(f'Steady quiet-part hiss around {hiss_level} dBFS often fits tape noise or repeated analog copying.')
+        if isinstance(dropouts, int) and dropouts > 0:
+            practical.append(f'{dropouts} short dropout(s) suggest worn tape, oxide loss or poor head contact more than vinyl.')
+        if wobble_cents is not None and wobble_rate is not None:
+            practical.append(f'Pitch wobble of about {wobble_cents} cents at {wobble_rate} cycles per second helps separate off-centre record behaviour from tape-transport instability.')
+        practical_text = ' '.join(practical)
+        if positive:
+            lead = 'This combines the main wear-related clues into one place so you can compare disc-style versus tape-style evidence.'
+            clue_bits = []
+            if record_clues:
+                clue_bits.append('Record-leaning clues: ' + '; '.join(record_clues) + '.')
+            if tape_clues:
+                clue_bits.append('Tape-leaning clues: ' + '; '.join(tape_clues) + '.')
+            score_bits = []
+            if record_score is not None:
+                score_bits.append(f'record score {record_score}')
+            if tape_score is not None:
+                score_bits.append(f'tape score {tape_score}')
+            scoring = (' The app weighs these as ' + ' versus '.join(score_bits) + '.') if len(score_bits) == 2 else ''
+            return lead + ' ' + ' '.join(clue_bits) + scoring + (' ' + practical_text if practical_text else '')
+        return ('No strong combined analog-wear pattern stood out. That does not rule out vinyl or cassette; '
+                'it only means hiss, crackle, dropouts and pitch wobble were too weak, absent or ambiguous to push the result one way.')
+
     if key == 'Vinyl rotation':
         count = m.get('click_events')
         period = number('fitted_rotation_period_s', 3)
@@ -542,9 +624,13 @@ def why(key, item):
         cents = m.get('deviation_cents')
         votes = m.get('votes')
         if isinstance(cents, (int,float)):
+            direction = 'very close to normal concert pitch' if abs(cents) < 8 else 'a little flat' if cents < 0 else 'a little sharp'
+            speed_note = 'By itself this does not prove wrong playback speed. If many songs from the same source show the same shift, slow or fast playback becomes more plausible.'
             return (f'Instrumental peaks group around {cents:+.1f} cents from standard A=440 tuning'
-                    + (f', using {votes} candidate peaks' if isinstance(votes,int) else '') + '. '
-                    'A cent is one hundredth of a semitone, and votes are the notes that support this estimate. It may reflect musical tuning, not wrong playback speed: the musicians may have tuned differently.')
+                    + (f', using {votes} candidate peaks' if isinstance(votes,int) else '') + f'. That is {direction}. '
+                    'A cent is one hundredth of a semitone, so 100 cents would equal one full semitone. '
+                    'In plain language, a negative value means the whole recording sits slightly lower in pitch than expected, and a positive value means it sits slightly higher. '
+                    + speed_note + ' The separate playback-speed card is stricter because it only acts when a known technical reference tone is present.')
         return 'The music did not contain a sufficiently consistent group of steady notes to estimate its overall tuning. Vocals, harmonics and instruments moving between notes make this uncertain.'
 
     if key == 'Playback speed':
@@ -614,6 +700,7 @@ def card(label, item, key=None, evidence_plots=None):
     # one conclusion, including an explicit neutral/no-measurement outcome.
     available = {
         'Likely audio source': ['Vinyl','Cassette','FM','AM','TV / video','Digital','Unclear'],
+        'Analog wear / transport': ['Record-like','Tape-like','Mixed','No strong clue'],
         'Vinyl rotation': ['33⅓ RPM','45 RPM','78 RPM','No pattern'],
         'Disc surface noise': ['Crackle','No clear crackle'],
         'Background hiss': ['Hiss-like','No clear hiss','Unmeasurable'],
@@ -635,6 +722,8 @@ def card(label, item, key=None, evidence_plots=None):
     if key == 'Likely audio source':
         choice = next((v for v,w in [('Vinyl','vinyl'),('Cassette','cassette'),('FM','fm radio'),
                                    ('AM','am radio'),('TV / video','tv / video'),('Digital','digital')] if w in raw), 'Unclear')
+    elif key == 'Analog wear / transport':
+        choice = 'Record-like' if 'record-like' in raw else 'Tape-like' if 'tape-like' in raw else 'Mixed' if 'mixed' in raw else 'No strong clue'
     elif key == 'Disc surface noise':
         choice = 'Crackle' if positive else 'No clear crackle'
     elif key == 'Background hiss':
@@ -681,7 +770,14 @@ def card(label, item, key=None, evidence_plots=None):
         except (ValueError,TypeError):
             return
         short.append((name, rendered))
-    if key == 'NDR-style 10 kHz dip':
+    if key == 'Analog wear / transport':
+        add_metric('Record score',m.get('record_score'),'{:.1f}')
+        add_metric('Tape score',m.get('tape_score'),'{:.1f}')
+        add_metric('Dropouts',m.get('dropouts'),'{}')
+        if isinstance(m.get('wobble_cents'), (int, float)) and isinstance(m.get('wobble_rate_hz'), (int, float)):
+            add_metric('Pitch wobble', f"{m.get('wobble_cents'):.2f} cents @ {m.get('wobble_rate_hz'):.2f} Hz")
+        add_metric('Quiet-part hiss',m.get('hiss_level_dbfs'),'{:.1f} dBFS')
+    elif key == 'NDR-style 10 kHz dip':
         add_metric('Centre',m.get('notch_median_hz',m.get('notch_candidate_hz')),'{:,.0f} Hz')
         depth=m.get('notch_depth_db')
         total=m.get('notch_tested_sections')
@@ -813,6 +909,99 @@ def card(label, item, key=None, evidence_plots=None):
             '</section>')
 
 
+
+def combine_analog_clues(surface, hiss, dropout, wow, rotation):
+    surface = surface if isinstance(surface, dict) else {}
+    hiss = hiss if isinstance(hiss, dict) else {}
+    dropout = dropout if isinstance(dropout, dict) else {}
+    wow = wow if isinstance(wow, dict) else {}
+    rotation = rotation if isinstance(rotation, dict) else {}
+
+    record_score = 0.0
+    tape_score = 0.0
+    record_clues = []
+    tape_clues = []
+
+    if meaningful(surface):
+        record_score += 2.7 if badge_class(surface) == 'strong' else 1.7
+        record_clues.append('surface crackle detected')
+
+    if meaningful(rotation):
+        record_score += 2.4 if badge_class(rotation) == 'strong' else 1.5
+        record_clues.append(str(rotation.get('result') or 'recurring click spacing'))
+
+    hm = hiss.get('metrics') if isinstance(hiss.get('metrics'), dict) else {}
+    hiss_level = hm.get('quiet_hiss_dbfs')
+    if meaningful(hiss):
+        tape_score += 2.0 if badge_class(hiss) == 'strong' else 1.2
+        record_score += 0.4
+        tape_clues.append('steady hiss bed')
+
+    drops_match = re.search(r'(\d+)', str(dropout.get('result','')))
+    drops = int(drops_match.group(1)) if drops_match and meaningful(dropout) else 0
+    if drops:
+        tape_score += min(2.8, 1.2 + 0.35 * drops)
+        tape_clues.append(f'{drops} dropout(s)')
+
+    wm = wow.get('metrics') if isinstance(wow.get('metrics'), dict) else {}
+    wobble_cents = wm.get('rms_cents')
+    wobble_rate = wm.get('rate_hz')
+    if meaningful(wow):
+        rate = wobble_rate if isinstance(wobble_rate, (int, float)) else None
+        disc_like = bool(rate and any(abs(rate-r)/r <= 0.08 for r in (1/1.8, 0.75, 1.30)))
+        if disc_like:
+            record_score += 1.8
+            tape_score += 0.5
+            record_clues.append('wow/flutter near a record rotation rate')
+        else:
+            tape_score += 1.8
+            record_score += 0.6
+            tape_clues.append('wow/flutter consistent with transport instability')
+
+    strongest = max(record_score, tape_score)
+    gap = abs(record_score - tape_score)
+    if strongest < 0.9:
+        return {
+            'result': 'No strong analog-wear clue',
+            'certainty': 'Unclear',
+            'detail': 'No strong combined analog-wear pattern stood out.',
+            'metrics': {
+                'record_score': round(record_score, 1),
+                'tape_score': round(tape_score, 1),
+                'dropouts': drops,
+                'hiss_level_dbfs': hiss_level,
+                'wobble_cents': wobble_cents,
+                'wobble_rate_hz': wobble_rate,
+                'record_clues': record_clues,
+                'tape_clues': tape_clues,
+            },
+        }
+
+    if record_score >= tape_score + 1.2:
+        result = 'Mostly record-like wear clues'
+    elif tape_score >= record_score + 1.2:
+        result = 'Mostly tape-like wear clues'
+    else:
+        result = 'Mixed analog clues'
+
+    certainty = 'High' if strongest >= 4.0 and gap >= 1.2 else 'Possible' if strongest >= 2.0 else 'Tentative'
+    detail = 'Combined analog clues summarized from crackle, hiss, dropouts and pitch wobble.'
+    return {
+        'result': result,
+        'certainty': certainty,
+        'detail': detail,
+        'metrics': {
+            'record_score': round(record_score, 1),
+            'tape_score': round(tape_score, 1),
+            'dropouts': drops,
+            'hiss_level_dbfs': hiss_level,
+            'wobble_cents': wobble_cents,
+            'wobble_rate_hz': wobble_rate,
+            'record_clues': record_clues,
+            'tape_clues': tape_clues,
+        },
+    }
+
 def summary(found):
     found = found if isinstance(found,dict) else {}
     statements=[]
@@ -859,6 +1048,12 @@ def sorted_findings(rows):
     items = dict(rows or [])
     items['Stereo / phase'] = combine_stereo_phase(
         items.get('Stereo format',{}),items.get('Stereo phase / delay',{}))
+    items['Analog wear / transport'] = combine_analog_clues(
+        items.get('Disc surface noise',{}),
+        items.get('Background hiss',{}),
+        items.get('Possible tape dropouts',{}),
+        items.get('Wow and flutter',{}),
+        items.get('Vinyl rotation',{}))
     order = list(LABELS)
     levels = {'strong': 3,'good': 2,'maybe': 1,'none': 0}
     # Source always first. A real NDR notch should be easy to find rather than
@@ -1006,7 +1201,7 @@ if report:
     report_version = str(meta.get("analyzer_version") or "unknown / earlier version")
     st.markdown(f'<div class="ac-analysis-build">Analyzed with engine: {html.escape(report_version)} · Current engine: {html.escape(ANALYZER_VERSION)}</div>', unsafe_allow_html=True)
     if report_version != ANALYZER_VERSION:
-        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.7.1 deployment completes.')
+        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.7.2 deployment completes.')
     results = sorted_findings(report.get("rows", []))
     plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(
