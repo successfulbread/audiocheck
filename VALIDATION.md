@@ -1,3 +1,9 @@
+# AudioCheQ v2.7.3 validation
+
+46 targeted regression tests passed, including six new measured-analog tests and existing memory lifecycle, origin gating, NDR, layout, explanation and defensive-rendering tests. The new tests cover changing stereo delay, identical-channel and mono controls, two timed treble losses, clean and low-rate controls, low-frequency rumble, separately measured slow wow and flutter, conflict-aware source ranking, actual RPM click timestamps and end-to-end WAV analysis. The attempted full suite exceeded the execution limit; a stale theme expectation from a previous release was updated and subsequently passed. The full suite has not been verified in a single run.
+
+Synthetic tests establish detector behavior on controlled signals, not real-world classification accuracy. No authentic cassette/record comparison corpus was available for this release. Live Streamlit deployment and extended memory load testing have not been performed. The experimental faint-copy screen is not independently validated as a print-through or reverse-side bleed detector.
+
 # AudioCheQ v2.7.2 reliability validation
 
 42 targeted tests passed locally (upload state, concurrency, temp-file cleanup, graph cleanup and failure, engine startup, spectrograms, hiss, NDR and layout). The complete suite was not completed in this environment. Browser/Streamlit Community Cloud behavior and long-term server RSS have not been verified. The actual host may retain uploaded bytes until widget cleanup and Python/native allocators may retain freed memory.

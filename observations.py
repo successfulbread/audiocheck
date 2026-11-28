@@ -260,6 +260,36 @@ def _enrich_findings_inner(rows, windows, metadata, intervals):
             (f'FM-filter comparator median {sorted(drops)[len(drops)//2]:+.1f} dB.' if drops else 'FM-filter comparator unavailable.'),
             bandwidth_min_khz=round(min(limits), 1), bandwidth_max_khz=round(max(limits), 1))
 
+    # One line per sampled excerpt: actual observations and test availability.
+    for i,(w,(start,length)) in enumerate(zip(windows,intervals),1):
+        loc=f'Excerpt {i}, {start:.2f}–{start+length:.2f} s'
+        for base in (50,60):
+            r=(w.get('mains') or {}).get(base) or {}
+            freqs=', '.join(f'{hz:.3f} Hz (×{h})' for h,hz in r.get('freqs',[])) or 'none accepted'
+            add('Likely power system',f'{loc}: {base} Hz family, {r.get("count",0)} strong and {r.get("weak",0)} weak harmonics; accepted lines {freqs}.')
+        for name,key in [('525-line TV','Radio / TV signals'),('625-line TV','Radio / TV signals'),('FM stereo pilot','FM stereo pilot')]:
+            r=(w.get('broadcast') or {}).get(name)
+            if r:
+                add(key,f'{loc}: {name} candidate {r["freq"]:,.2f} Hz; {r["snr"]:.1f} dB above nearby spectrum; {r["relative"]:.1f} dB relative to signal power; persistence {"yes" if r.get("persistent") else "no"}; passed {"yes" if r.get("pass") else "no"}.')
+            else:
+                add(key,f'{loc}: {name}, no qualifying candidate retained (or insufficient original bandwidth).')
+        r=w.get('ndr') or {}
+        if r.get('freq') is not None:
+            add('NDR-style 10 kHz dip',f'{loc}: candidate {r["freq"]:.2f} Hz; depth {r["depth_db"]:.2f} dB; occurrence {100*r["occurrence"]:.0f}%; two-sided depth {r["bilateral_db"]:.2f} dB; comparator {r["control95"]:.2f} dB; qualifying {"yes" if r.get("possible") or r.get("supported") else "no"}.')
+        else: add('NDR-style 10 kHz dip',f'{loc}: no measurable dip retained.')
+        b=w.get('bandwidth_feature') or {}
+        if b:
+            delta=b.get('drop_db'); delta_text=f'{delta:.1f} dB' if delta is not None else 'unavailable'
+            add('Audio bandwidth',f'{loc}: estimated range {b["range_khz"]:.1f} kHz; 15 kHz band drop {delta_text}; sharp FM-style decline {"yes" if b.get("sharp_fm") else "no"}.')
+        else: add('Audio bandwidth',f'{loc}: range not measurable.')
+        ph=(w.get('phase') or {}).get('metrics') or {}
+        if ph.get('delay_ms') is not None:
+            add('Stereo phase / delay',f'{loc}: L/R delay {ph["delay_ms"]:+.4f} ms; zero-lag correlation {ph.get("zero_corr")}; aligned correlation {ph.get("aligned_corr")}; level difference {ph.get("level_difference_db")} dB.')
+        tu=(w.get('tuning') or {}).get('metrics') or {}
+        if tu.get('deviation_cents') is not None:
+            add('Pitch / musical tuning',f'{loc}: {tu["deviation_cents"]:+.1f} cents; {tu.get("votes")} peaks, {tu.get("notes")} note bins, {100*tu.get("fraction",0):.1f}% of votes in the cluster; conditional correction {tu.get("hypothetical_correction_percent"):+.2f}%.')
+        else: add('Pitch / musical tuning',f'{loc}: {(w.get("tuning") or {}).get("detail","No accepted tuning estimate.")}')
+
     age = found.get('Digital file history', {})
     facts = age.get('facts', {})
     add('Digital file history', common, spans,

@@ -1,4 +1,4 @@
-"""AudioCheQ v2.7.2 - refined analog differentiation, safer uploads and clearer explanations."""
+"""AudioCheQ v2.7.3 - refined analog differentiation, safer uploads and clearer explanations."""
 from __future__ import annotations
 
 import html
@@ -10,8 +10,8 @@ import gc
 
 import streamlit as st
 
-APP_VERSION = "2.7.2"
-st.set_page_config(page_title="AudioCheQ v2.7.2 | Find the clues", page_icon=":material/graphic_eq:", layout="wide", initial_sidebar_state="collapsed")
+APP_VERSION = "2.7.3"
+st.set_page_config(page_title="AudioCheQ v2.7.3 | Find the clues", page_icon=":material/graphic_eq:", layout="wide", initial_sidebar_state="collapsed")
 
 # Load this release's uniquely named engine from the SAME directory as app.py.
 # This avoids a stale analyzer.py left in GitHub or an unrelated `analyzer`
@@ -20,9 +20,9 @@ st.set_page_config(page_title="AudioCheQ v2.7.2 | Find the clues", page_icon=":m
 import importlib.util
 ENGINE_PATH = Path(__file__).resolve().with_name("audiocheq_engine_v270.py")
 if not ENGINE_PATH.is_file():
-    st.error("AudioCheQ v2.7.2 is missing its audio engine file.")
+    st.error("AudioCheQ v2.7.3 is missing its audio engine file.")
     st.write("Missing: **audiocheq_engine_v270.py** beside **app.py**.")
-    st.info("Upload the matching files from the v2.7.2 update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
+    st.info("Upload the matching files from the v2.7.3 update into the GitHub repository root, then reboot your Streamlit app. Do not upload the ZIP itself.")
     st.stop()
 try:
     _spec = importlib.util.spec_from_file_location("audiocheq_engine_v270", ENGINE_PATH)
@@ -31,7 +31,7 @@ try:
     _engine = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_engine)
 except Exception as exc:
-    st.error("AudioCheQ could not load its v2.7.2 audio engine.")
+    st.error("AudioCheQ could not load its v2.7.3 audio engine.")
     st.code(f"{type(exc).__name__}: {exc}", language="text")
     st.write(f"Engine file: `{ENGINE_PATH.name}`")
     st.info("Check that the complete ZIP contents are in the repository root and that Streamlit has finished installing packages.txt and requirements.txt.")
@@ -46,7 +46,7 @@ if _analyzer_loaded != APP_VERSION or _missing_exports:
     if _missing_exports:
         st.write("Missing engine fields: " + ", ".join(_missing_exports))
     st.write(f"Loaded engine file: `{ENGINE_PATH.name}`")
-    st.info("Replace app.py and audiocheq_engine_v270.py together from the v2.7.2 update ZIP, then reboot the app.")
+    st.info("Replace app.py and audiocheq_engine_v270.py together from the v2.7.3 update ZIP, then reboot the app.")
     st.stop()
 
 MAX_BYTES = _engine.MAX_BYTES
@@ -219,6 +219,17 @@ header[data-testid="stHeader"] {background:transparent;}
 .ac-source-alternatives span {padding:6px 9px;border-radius:8px;background:#FFFFFF99;border:1px solid #B2C3D9;}
 @media(max-width:1020px) {.ac-card.ac-feature {grid-column:1;} }
 @media(min-width:1021px) {.ac-card.ac-feature .ac-result {font-size:1.44rem;}}
+.ac-data-section{margin:16px 0;padding-top:5px;border-top:1px solid #7482964A;}
+.ac-data-scroll{overflow:auto;max-height:310px;margin:9px 0 12px;border:1px solid #9BAFC0;border-radius:8px;}
+.ac-data-table{border-collapse:collapse;width:100%;font-size:.78rem;line-height:1.4;color:#203650;background:#fff!important;}
+.ac-data-table th,.ac-data-table td{padding:7px 9px;text-align:left;vertical-align:top;border-bottom:1px solid #D5DFE8;min-width:75px;}
+.ac-data-table th{position:sticky;top:0;background:#E6EEF6;color:#243D5A;font-weight:800;z-index:1;}
+.ac-data-table tr:nth-child(even){background:#F2F6FA;}
+.ac-card.none .ac-data-scroll{border-color:#586C83;}
+.ac-card.none .ac-data-table{background:#35445B!important;color:#E6EEF8;}
+.ac-card.none .ac-data-table th{background:#495C73;color:#E6EEF8;}
+.ac-card.none .ac-data-table td{border-color:#596A80;}
+.ac-card.none .ac-data-table tr:nth-child(even){background:#3B4B62;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -271,7 +282,7 @@ st.markdown('''<div class="ac-hero">
 </svg>
 <div class="ac-brand">Audio<span>CheQ</span></div>
 <p class="ac-tagline">Audio provenance analysis</p>
-<p class="ac-intro">Professional audio forensics for mystery recordings: source clues from vinyl, cassette, radio, pitch, speed and broadcast filtering.</p><div class="ac-build">v2.7.2 &nbsp;·&nbsp; safer uploads · refined analog clues</div></div>''', unsafe_allow_html=True)
+<p class="ac-intro">Professional audio forensics for mystery recordings: source clues from vinyl, cassette, radio, pitch, speed and broadcast filtering.</p><div class="ac-build">v2.7.3 &nbsp;·&nbsp; measured analog wear · detailed evidence</div></div>''', unsafe_allow_html=True)
 
 if "report" not in st.session_state:
     st.session_state.report = None
@@ -310,7 +321,7 @@ def badge_class(item):
 
 LABELS = {
     'Likely audio source': ('Most likely origin & confidence', '&#9835;'),
-    'Analog wear / transport': ('Analog wear & transport clues', '&#9834;'),
+    'Analog wear / transport': ('Analog wear, tape & disc measurements', '&#9834;'),
     'NDR-style 10 kHz dip': ('10 kHz broadcast-filter dip', '&#9836;'),
     'Stereo / phase': ('Channels & phase balance', '&#8646;'),
     'Vinyl rotation': ('Record rotation', '&#9673;'),
@@ -441,7 +452,7 @@ def why(key, item):
         intro=(f'The strongest combined clues favour {best}. '
                if not item.get('fallback_guess') else
                'No dependable analog or broadcast fingerprint was found, so digital is a weak fallback rather than a confirmed origin. ')
-        reasons=' '.join(str(x).rstrip('.')+'.' for x in evidence[:5])
+        reasons=' '.join(str(x).rstrip('.')+'.' for x in evidence[:8])
         freq=item.get('frequency_clue') if isinstance(item.get('frequency_clue'),dict) else {}
         fm=freq.get('metrics') if isinstance(freq.get('metrics'),dict) else {}
         cutoff=fm.get('estimated_cutoff_khz')
@@ -477,43 +488,16 @@ def why(key, item):
         caveat=(' A notch near 10 kHz indicates broadcast/copying filtering, not a confirmed NDR station. '
                 'A TV scan-frequency tone can be interference from a screen during transfer. '
                 'A song may pass through several formats before ending up as MP3 or FLAC.')
-        return intro+confidence+reasons+ctext+score+fm_rule+fm_status+' '+independent+(' '+str(context[0]) if context else '')+caveat
+        return intro+confidence+reasons+ctext+score+fm_rule+fm_status+' '+independent+(' '+' '.join(str(v) for v in context) if context else '')+caveat
 
     if key == 'Analog wear / transport':
-        record_score = number('record_score', 1)
-        tape_score = number('tape_score', 1)
-        hiss_level = number('hiss_level_dbfs', 1)
-        dropouts = m.get('dropouts')
-        wobble_cents = number('wobble_cents', 2)
-        wobble_rate = number('wobble_rate_hz', 2)
-        record_clues = m.get('record_clues') or []
-        tape_clues = m.get('tape_clues') or []
-        practical = []
-        if 'surface crackle' in ' '.join(record_clues).lower():
-            practical.append('Irregular crackle points more toward a disc surface than a cassette shell.')
-        if hiss_level is not None:
-            practical.append(f'Steady quiet-part hiss around {hiss_level} dBFS often fits tape noise or repeated analog copying.')
-        if isinstance(dropouts, int) and dropouts > 0:
-            practical.append(f'{dropouts} short dropout(s) suggest worn tape, oxide loss or poor head contact more than vinyl.')
-        if wobble_cents is not None and wobble_rate is not None:
-            practical.append(f'Pitch wobble of about {wobble_cents} cents at {wobble_rate} cycles per second helps separate off-centre record behaviour from tape-transport instability.')
-        practical_text = ' '.join(practical)
-        if positive:
-            lead = 'This combines the main wear-related clues into one place so you can compare disc-style versus tape-style evidence.'
-            clue_bits = []
-            if record_clues:
-                clue_bits.append('Record-leaning clues: ' + '; '.join(record_clues) + '.')
-            if tape_clues:
-                clue_bits.append('Tape-leaning clues: ' + '; '.join(tape_clues) + '.')
-            score_bits = []
-            if record_score is not None:
-                score_bits.append(f'record score {record_score}')
-            if tape_score is not None:
-                score_bits.append(f'tape score {tape_score}')
-            scoring = (' The app weighs these as ' + ' versus '.join(score_bits) + '.') if len(score_bits) == 2 else ''
-            return lead + ' ' + ' '.join(clue_bits) + scoring + (' ' + practical_text if practical_text else '')
-        return ('No strong combined analog-wear pattern stood out. That does not rule out vinyl or cassette; '
-                'it only means hiss, crackle, dropouts and pitch wobble were too weak, absent or ambiguous to push the result one way.')
+        if not item.get('analog_measurements'):
+            return detail or 'Analyze again to see the detailed wear and transport measurements.'
+        vinyl=number('record_score',2); tape=number('tape_score',2)
+        return ('The measured signal characteristics below distinguish possible physical disc wear from magnetic tape and transport defects. '
+                f'The actual origin scores are {vinyl} for vinyl and {tape} for tape. '
+                'These are weighted evidence points, not probabilities. Individual measurements are shown even when no source conclusion is supported. '
+                'All times refer to sampled parts of the uploaded file, not to its original recording date. ')
 
     if key == 'Vinyl rotation':
         count = m.get('click_events')
@@ -625,7 +609,8 @@ def why(key, item):
         votes = m.get('votes')
         if isinstance(cents, (int,float)):
             direction = 'very close to normal concert pitch' if abs(cents) < 8 else 'a little flat' if cents < 0 else 'a little sharp'
-            speed_note = 'By itself this does not prove wrong playback speed. If many songs from the same source show the same shift, slow or fast playback becomes more plausible.'
+            corr=m.get('hypothetical_correction_percent')
+            speed_note = ('If speed alone caused this offset, the conditional playback correction would be '+f'{corr:+.2f}% (positive = faster, negative = slower). ' if isinstance(corr,(int,float)) else '')+'By itself this does not prove wrong playback speed. If many songs from the same source show the same shift, slow or fast playback becomes more plausible.'
             return (f'Instrumental peaks group around {cents:+.1f} cents from standard A=440 tuning'
                     + (f', using {votes} candidate peaks' if isinstance(votes,int) else '') + f'. That is {direction}. '
                     'A cent is one hundredth of a semitone, so 100 cents would equal one full semitone. '
@@ -693,7 +678,7 @@ def card(label, item, key=None, evidence_plots=None):
     pill = {'strong':'Clear finding', 'good':'Possible', 'maybe':'Tentative', 'none':'Not confirmed'}[cls]
     if evidence_plots:
         cls += ' has-spectrogram'  # semantic marker; does NOT force a full-width card
-    if key == 'Likely audio source':
+    if key in ('Likely audio source','Analog wear / transport'):
         cls += ' ac-feature'
 
     # Options are evidence labels, not interactive buttons. Highlight exactly
@@ -771,12 +756,15 @@ def card(label, item, key=None, evidence_plots=None):
             return
         short.append((name, rendered))
     if key == 'Analog wear / transport':
-        add_metric('Record score',m.get('record_score'),'{:.1f}')
-        add_metric('Tape score',m.get('tape_score'),'{:.1f}')
-        add_metric('Dropouts',m.get('dropouts'),'{}')
-        if isinstance(m.get('wobble_cents'), (int, float)) and isinstance(m.get('wobble_rate_hz'), (int, float)):
-            add_metric('Pitch wobble', f"{m.get('wobble_cents'):.2f} cents @ {m.get('wobble_rate_hz'):.2f} Hz")
+        add_metric('Vinyl evidence points',m.get('record_score'),'{:.2f}')
+        add_metric('Tape evidence points',m.get('tape_score'),'{:.2f}')
+        add_metric('Treble dropout candidates',m.get('treble_dropouts'))
+        add_metric('Full-level interruptions',m.get('dropouts'))
+        add_metric('Coherent alignment frames',m.get('alignment_frames'))
+        add_metric('Varying-delay excerpts',m.get('alignment_variable_sections'))
         add_metric('Quiet-part hiss',m.get('hiss_level_dbfs'),'{:.1f} dBFS')
+        if isinstance(m.get('wobble_cents'),(int,float)):
+            add_metric('Overall pitch wobble',m.get('wobble_cents'),'{:.2f} cents RMS')
     elif key == 'NDR-style 10 kHz dip':
         add_metric('Centre',m.get('notch_median_hz',m.get('notch_candidate_hz')),'{:,.0f} Hz')
         depth=m.get('notch_depth_db')
@@ -834,7 +822,7 @@ def card(label, item, key=None, evidence_plots=None):
 
     quick_html = ('<div class="ac-quick">' + ''.join(
         '<div class="ac-quick-one"><span>'+html.escape(str(k))+'</span><strong>'+
-        html.escape(str(v))+'</strong></div>' for k,v in short[:3])+'</div>') if short else ''
+        html.escape(str(v))+'</strong></div>' for k,v in short[:8 if key=='Analog wear / transport' else 4])+'</div>') if short else ''
     origin_summary=''
     if key=='Likely audio source':
         supports=[str(s).strip().rstrip('.') for s in (item.get('evidence') or []) if str(s).strip()]
@@ -850,23 +838,22 @@ def card(label, item, key=None, evidence_plots=None):
     # The first explanation covers the key finding. Only add raw observations
     # that show additional *relevant* evidence, not sample-rate boilerplate or
     # unrelated FFT thresholds. Make the purpose of the extra data explicit.
-    prefix_map={
-        'NDR-style 10 kHz dip':('Strongest candidate','Dip seen','Qualifying dip'),
-        'Likely power system':('50 Hz family','60 Hz family'),
-        'Radio / TV signals':('525-line TV','625-line TV'),
-        'Stereo / phase':('Phase-band','Decoded '),
-        'Vinyl rotation':('Accepted click-period','Fitted click interval'),
-        'FM stereo pilot':('19,000 Hz reference',),
-        'Background hiss':('quieter one-second','one-second frames'),
-        'Wow and flutter':('excerpts had a trackable',),
-    }
-    allowed=prefix_map.get(key,())
-    numeric_notes=[str(x) for x in raw_notes if allowed and str(x).lstrip().startswith(allowed)]
-    numeric_notes=numeric_notes[:2]
-    if numeric_notes:
-        detail_html += ('<div class="ac-measure-head">Supporting measurements</div>'
+    # Show the actual measurement notes across every card, including negative
+    # tests. Keep the user-friendly explanation and numerical data together.
+    numeric_notes=[str(x) for x in raw_notes if str(x).strip()]
+    if numeric_notes and key!='Analog wear / transport':
+        detail_html += ('<div class="ac-measure-head">Measured data &amp; test context</div>'
                         '<ul class="ac-measure-list">'+''.join(
-            '<li>'+html.escape(note[:330])+'</li>' for note in numeric_notes)+'</ul>')
+            '<li>'+html.escape(note[:1500])+'</li>' for note in numeric_notes[:24])+'</ul>')
+    if key=='Analog wear / transport' and item.get('analog_measurements'):
+        from evidence_ui import analog_html
+        detail_html += analog_html(item)
+    if key=='Vinyl rotation' and ('click_matches' in item or 'click_candidates_by_excerpt' in item):
+        from evidence_ui import rotation_html
+        detail_html += rotation_html(item)
+    if key=='Likely audio source' and item.get('score_contributions'):
+        from evidence_ui import score_table
+        detail_html += score_table(item['score_contributions'])
     if key=='Embedded metadata' and isinstance(item.get('tags'),list) and item['tags']:
         tagrows=[]
         for entry in item['tags'][:90]:
@@ -909,98 +896,6 @@ def card(label, item, key=None, evidence_plots=None):
             '</section>')
 
 
-
-def combine_analog_clues(surface, hiss, dropout, wow, rotation):
-    surface = surface if isinstance(surface, dict) else {}
-    hiss = hiss if isinstance(hiss, dict) else {}
-    dropout = dropout if isinstance(dropout, dict) else {}
-    wow = wow if isinstance(wow, dict) else {}
-    rotation = rotation if isinstance(rotation, dict) else {}
-
-    record_score = 0.0
-    tape_score = 0.0
-    record_clues = []
-    tape_clues = []
-
-    if meaningful(surface):
-        record_score += 2.7 if badge_class(surface) == 'strong' else 1.7
-        record_clues.append('surface crackle detected')
-
-    if meaningful(rotation):
-        record_score += 2.4 if badge_class(rotation) == 'strong' else 1.5
-        record_clues.append(str(rotation.get('result') or 'recurring click spacing'))
-
-    hm = hiss.get('metrics') if isinstance(hiss.get('metrics'), dict) else {}
-    hiss_level = hm.get('quiet_hiss_dbfs')
-    if meaningful(hiss):
-        tape_score += 2.0 if badge_class(hiss) == 'strong' else 1.2
-        record_score += 0.4
-        tape_clues.append('steady hiss bed')
-
-    drops_match = re.search(r'(\d+)', str(dropout.get('result','')))
-    drops = int(drops_match.group(1)) if drops_match and meaningful(dropout) else 0
-    if drops:
-        tape_score += min(2.8, 1.2 + 0.35 * drops)
-        tape_clues.append(f'{drops} dropout(s)')
-
-    wm = wow.get('metrics') if isinstance(wow.get('metrics'), dict) else {}
-    wobble_cents = wm.get('rms_cents')
-    wobble_rate = wm.get('rate_hz')
-    if meaningful(wow):
-        rate = wobble_rate if isinstance(wobble_rate, (int, float)) else None
-        disc_like = bool(rate and any(abs(rate-r)/r <= 0.08 for r in (1/1.8, 0.75, 1.30)))
-        if disc_like:
-            record_score += 1.8
-            tape_score += 0.5
-            record_clues.append('wow/flutter near a record rotation rate')
-        else:
-            tape_score += 1.8
-            record_score += 0.6
-            tape_clues.append('wow/flutter consistent with transport instability')
-
-    strongest = max(record_score, tape_score)
-    gap = abs(record_score - tape_score)
-    if strongest < 0.9:
-        return {
-            'result': 'No strong analog-wear clue',
-            'certainty': 'Unclear',
-            'detail': 'No strong combined analog-wear pattern stood out.',
-            'metrics': {
-                'record_score': round(record_score, 1),
-                'tape_score': round(tape_score, 1),
-                'dropouts': drops,
-                'hiss_level_dbfs': hiss_level,
-                'wobble_cents': wobble_cents,
-                'wobble_rate_hz': wobble_rate,
-                'record_clues': record_clues,
-                'tape_clues': tape_clues,
-            },
-        }
-
-    if record_score >= tape_score + 1.2:
-        result = 'Mostly record-like wear clues'
-    elif tape_score >= record_score + 1.2:
-        result = 'Mostly tape-like wear clues'
-    else:
-        result = 'Mixed analog clues'
-
-    certainty = 'High' if strongest >= 4.0 and gap >= 1.2 else 'Possible' if strongest >= 2.0 else 'Tentative'
-    detail = 'Combined analog clues summarized from crackle, hiss, dropouts and pitch wobble.'
-    return {
-        'result': result,
-        'certainty': certainty,
-        'detail': detail,
-        'metrics': {
-            'record_score': round(record_score, 1),
-            'tape_score': round(tape_score, 1),
-            'dropouts': drops,
-            'hiss_level_dbfs': hiss_level,
-            'wobble_cents': wobble_cents,
-            'wobble_rate_hz': wobble_rate,
-            'record_clues': record_clues,
-            'tape_clues': tape_clues,
-        },
-    }
 
 def summary(found):
     found = found if isinstance(found,dict) else {}
@@ -1048,12 +943,7 @@ def sorted_findings(rows):
     items = dict(rows or [])
     items['Stereo / phase'] = combine_stereo_phase(
         items.get('Stereo format',{}),items.get('Stereo phase / delay',{}))
-    items['Analog wear / transport'] = combine_analog_clues(
-        items.get('Disc surface noise',{}),
-        items.get('Background hiss',{}),
-        items.get('Possible tape dropouts',{}),
-        items.get('Wow and flutter',{}),
-        items.get('Vinyl rotation',{}))
+    items.setdefault('Analog wear / transport',{'result':'Detailed measurements unavailable','certainty':'Not measurable','detail':'Analyze the recording again with the current engine.'})
     order = list(LABELS)
     levels = {'strong': 3,'good': 2,'maybe': 1,'none': 0}
     # Source always first. A real NDR notch should be easy to find rather than
@@ -1201,11 +1091,11 @@ if report:
     report_version = str(meta.get("analyzer_version") or "unknown / earlier version")
     st.markdown(f'<div class="ac-analysis-build">Analyzed with engine: {html.escape(report_version)} · Current engine: {html.escape(ANALYZER_VERSION)}</div>', unsafe_allow_html=True)
     if report_version != ANALYZER_VERSION:
-        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.7.2 deployment completes.')
+        st.warning('This report was created by an older or unverified analyzer. Please upload the recording again after the v2.7.3 deployment completes.')
     results = sorted_findings(report.get("rows", []))
     plots = meta.get("spectrograms", {})
     st.markdown('<div class="ac-grid">' + "".join(
-        card(LABELS[key][0], item, key, evidence_plots=(plots.get('Stereo phase / delay',[]) if key=='Stereo / phase' else plots.get(key,[])))
+        card(LABELS[key][0], item, key, evidence_plots=(plots.get('Stereo phase / delay',[]) if key=='Stereo / phase' else plots.get('Wow and flutter',[]) if key=='Analog wear / transport' else plots.get(key,[])))
         for key, item in results) + '</div>', unsafe_allow_html=True)
     with st.expander("File details & all embedded tags"):
         info = meta.get("file_history", {}).get("facts", {})

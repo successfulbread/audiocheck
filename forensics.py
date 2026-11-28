@@ -224,7 +224,7 @@ def track_reference_tone(audio, center_hz, nominal_hz, snr_db):
         return None
     inst = center_hz + np.gradient(np.unwrap(np.angle(base)))*fs/(2*np.pi)
     # The smoothed derivative resolves 0.5-30 Hz modulation.
-    inst=signal.savgol_filter(inst,17,2)
+    inst=signal.savgol_filter(inst,5,2)
     # Suppress filtering boundaries and any remaining transient frames.
     inst=inst[fs:-fs]
     if len(inst)<fs*4 or not np.all(np.isfinite(inst)):
@@ -234,7 +234,22 @@ def track_reference_tone(audio, center_hz, nominal_hz, snr_db):
     cents=cents - np.mean(cents)
     rms=float(np.sqrt(np.mean(cents*cents)))
     f,p=signal.welch(cents,fs=fs,nperseg=min(len(cents),4096),scaling='spectrum')
-    useful=(f>=.3)&(f<=30)
+    # Separate slow wow and faster flutter. A weak mains line is unsuitable
+    # for confident high-rate modulation; keep that result explicitly unavailable.
+    band_metrics={}
+    for name,lo,hi in [('slow',.3,6),('fast',6,25)]:
+        if name=='fast' and (nominal_hz<500 or snr_db<18):
+            continue
+        mask=(f>=lo)&(f<hi)
+        if not mask.any():continue
+        ids=np.flatnonzero(mask); idx=ids[int(np.argmax(p[ids]))]
+        # Welch Hann spectrum has 1.5-bin equivalent noise bandwidth.
+        band_rms=float(np.sqrt(max(0,np.sum(p[mask])/1.5)))
+        local=mask & (abs(f-f[idx])>.24)
+        prominence_band=float(10*np.log10((p[idx]+1e-15)/(np.median(p[local])+1e-15))) if local.any() else 0.
+        band_metrics.update({name+'_rms_cents':round(band_rms,3),name+'_peak_hz':round(float(f[idx]),3),name+'_prominence_db':round(prominence_band,1)})
+    band_metrics['valid_fast_band_hz']='6–25 Hz' if 'fast_rms_cents' in band_metrics else None
+    useful=(f>=.3)&(f<=25)
     # Top periodic component across the whole wow+flutter band.
     region=np.flatnonzero(useful)
     if not len(region): return None
@@ -248,7 +263,7 @@ def track_reference_tone(audio, center_hz, nominal_hz, snr_db):
     periodic=bool(prominence>=12 and amplitude>=.65 and rms>=.50)
     if periodic and .3<=peak_hz<6:
         classification='Periodic wow'
-    elif periodic and 6<=peak_hz<=30:
+    elif periodic and 6<=peak_hz<=25 and 'fast_rms_cents' in band_metrics:
         classification='Possible flutter'
     elif rms>=1.4:
         classification='Pitch drift / instability'
@@ -258,10 +273,10 @@ def track_reference_tone(audio, center_hz, nominal_hz, snr_db):
             'rms_cents':round(rms,2), 'rate_hz':round(peak_hz,3),
             'modulation_amplitude_cents':round(amplitude,2),
             'prominence_db':float(round(float(prominence),1)),'tone_hz':round(center,3),
-            'nominal_hz':round(nominal_hz,3),
+            'nominal_hz':round(nominal_hz,3), **band_metrics,
             'detail':(f'A tracked reference tone at {center:.3f} Hz (nominal {nominal_hz:,.2f} Hz) '
                       f'showed {rms:.2f} cents RMS short-term pitch variation. '
-                      f'Strongest 0.3–30 Hz frequency-modulation component: {peak_hz:.2f} Hz, '
+                      f'Strongest 0.3–25 Hz frequency-modulation component: {peak_hz:.2f} Hz, '
                       f'{amplitude:.2f} cents peak amplitude, {prominence:.1f} dB above other modulation rates. '
                       'Wow refers to slower speed fluctuations (below ~6 Hz); flutter is faster. '
                       'A clear peak near 0.556 / 0.750 / 1.300 Hz may be compatible with '

@@ -48,17 +48,19 @@ def _fm_cutoff(bandwidth, metadata):
 
 def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
                  bandwidth, metadata, stereo, phase, wow, power, speed,
-                 rds=None, hiss=None):
+                 rds=None, hiss=None, analog=None):
     """Give a ranked best guess with measured supporting evidence and caveats."""
     scores = {name: 0.0 for name in LABELS}
     evidence = {name: [] for name in LABELS}
     evidence_strengths = {name: [] for name in LABELS}
     context = []
+    contributions = {name: [] for name in LABELS}
 
     def add(which, weight, reason, strength='support'):
         scores[which] += float(weight)
         evidence[which].append(reason)
         evidence_strengths[which].append(strength)
+        contributions[which].append({"points":round(float(weight),2),"reason":reason,"strength":strength})
 
     rotation = rotation or {}
     surface = surface or {}
@@ -95,7 +97,7 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
     hm = hiss.get('metrics') or {}
     hiss_result = str(hiss.get('result', '')).lower()
     if hiss.get('certainty') in USABLE and 'hiss' in hiss_result and 'no ' not in hiss_result:
-        strength = 'specific' if hiss.get('certainty') in CONFIRMED else 'support'
+        strength = 'support'  # a noise bed alone is not tape-specific
         w = 4.8 if hiss.get('certainty') in CONFIRMED else 2.8 if hiss.get('certainty')=='Possible' else 1.3
         pers = _number(hm.get('persistent_percent'))
         level = _number(hm.get('quiet_hiss_dbfs'))
@@ -120,7 +122,7 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
     wobble_pm = _number(wm.get('prominence_db'), 12)
     wobble_good = (wow.get('certainty') in USABLE and wobble_cents is not None
                    and wobble_rate is not None and 0.10 <= wobble_cents <= 12.0
-                   and 0.30 <= wobble_rate <= 12.0 and wobble_pm >= 6
+                   and 0.30 <= wobble_rate <= 25.0 and wobble_pm >= 6
                    and ('wow' in str(wow.get('result','')).lower() or
                         'flutter' in str(wow.get('result','')).lower()))
     if wobble_good:
@@ -132,13 +134,61 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
                 f'Pitch wobbles about {wobble_rate:.3f} times per second, near the {matched[0]} rotation rate; an off-centre record can do this.', 'specific')
             add('Cassette / Tape', .5, 'Tape transports can also produce regular pitch wobble.')
         else:
-            weight = 3.9 if wow.get('certainty') in CONFIRMED else 2.9
+            weight = (4.4 if wobble_rate>=6 else 3.9) if wow.get('certainty') in CONFIRMED else (3.5 if wobble_rate>=6 else 2.9)
             add('Cassette / Tape', weight,
                 f'The measured pitch varies {wobble_cents:.1f} cents RMS at {wobble_rate:.2f} cycles/second, consistent with mechanical tape-transport instability.',
                 'specific' if wow.get('certainty') in CONFIRMED else 'support')
             add('Vinyl / Record',1.2,'Turntable motors can cause similar pitch fluctuations.')
     elif wobble_cents is not None and wobble_cents > 12:
         context.append('An implausibly large pitch variation was excluded because the tone tracker may have followed music instead of the reference.')
+
+    # Independent, measured cassette-vs-disc features. A generic stereo offset
+    # is not azimuth; the dedicated detector requires coherent delay in two bands.
+    analog = analog or {}
+    al=analog.get('alignment') or {}; tr=analog.get('treble') or {}
+    ru=analog.get('rumble') or {}; echo=analog.get('echo') or {}
+    variable=int(al.get('variable_sections',0)); fixed=int(al.get('fixed_sections',0))
+    alignment_supported=bool(variable or fixed)
+    if alignment_supported:
+        spans=[a.get('span_ms') for a in al.get('sections',[]) if a.get('span_ms') is not None and (a.get('variable') or a.get('fixed'))]
+        span=max(spans,default=0)
+        n=len(al.get('frames',[]))
+        add('Cassette / Tape', 8.5 if variable else 5.2 if fixed>=2 else 4.3,
+            f'Coherent interchannel timing differences in two frequency bands: {n} accepted half-second frames; {variable} varying and {fixed} fixed-delay excerpt(s), largest measured delay span {span:.3f} ms. Compatible with tape-head alignment; stereo processing remains an alternative.',
+            'specific' if variable or fixed>=2 else 'support')
+    treble_events=tr.get('events') or []
+    if treble_events:
+        depth=max(float(v.get('loss_db',0)) for v in treble_events)
+        repeat=len(treble_events)>=2
+        add('Cassette / Tape', min(5.8,2.0+1.25*len(treble_events)) if repeat else 1.2,
+            f'{len(treble_events)} short treble-only loss candidate(s), up to {depth:.1f} dB relative to lower frequencies. Lower-band sound remained present; tape contact loss is plausible, although changes in the music or editing can mimic this.',
+            'support')
+    # Separately measured high-rate flutter only earns additional weight when
+    # the slow peak was scored instead, to avoid double-counting the same track.
+    fast=_number(wm.get('fast_rms_cents')); fast_prom=_number(wm.get('fast_prominence_db'),0); fast_peak=_number(wm.get('fast_peak_hz'))
+    if wow.get('certainty') in USABLE and fast is not None and .35<=fast<=12 and fast_peak is not None and fast_prom>=12 and (not wobble_good or wobble_rate<6):
+        add('Cassette / Tape',1.8,f'Separate faster 6–25 Hz variation: {fast:.2f} cents RMS, peak {fast_peak:.2f} Hz. This can be compatible with tape transport but shares the same reference-tone measurement.','support')
+    rsecs=[r for r in ru.get('sections',[]) if r.get('candidate')]
+    if rsecs:
+        add('Vinyl / Record',1.2 if len(rsecs)>=2 else .7,
+            f'Persistent 10–35 Hz low-frequency energy in {len(rsecs)} excerpt(s) could be turntable rumble; bass, handling and other machinery can mimic it.')
+    # Hiss variation is a weak clue, not a diagnosis of Dolby settings.
+    noisy=[r for r in (analog.get('hiss') or {}).get('sections',[]) if r.get('possible') and (r.get('spread_db') or 0)>=5]
+    if noisy and (alignment_supported or len(treble_events)>=2):
+        add('Cassette / Tape',.7,f'Noise-floor variation in {len(noisy)} excerpt(s) accompanies more persuasive tape-like clues; noise reduction or copying can alter hiss.')
+    echoes=echo.get('events') or []
+    if echoes:
+        context.append(f'{len(echoes)} faint forward/reversed same-recording similarity candidate(s) were found. Echo, sampling or processing can mimic tape print-through; these are not counted as independent medium evidence.')
+    # The user's preference: credible head-alignment evidence outranks isolated
+    # disc-like noise. Strong independent disc signatures can still win, e.g.
+    # a disc subsequently recorded onto tape. Keep the adjustment transparent.
+    disc_pattern=rotation.get('certainty') in CONFIRMED and bool(re.search(r'RPM',rpm,re.I))
+    disc_crackle=surface.get('certainty') in CONFIRMED and 'crackle' in s and not s.startswith('no ')
+    disc_wow=bool(wobble_good and any(abs(wobble_rate-f)/f<=.045 for f in (1/1.8,.75,1.3)))
+    repeat_rpm=sum(bool(f.get('strict')) for f in rotation.get('click_matches',[]))>=2
+    strong_disc=bool((disc_pattern and (disc_crackle or disc_wow or repeat_rpm)) or (disc_crackle and rotation.get('certainty') in ('High','Strong','Possible') and disc_wow))
+    if alignment_supported and strong_disc:
+        context.insert(0,'Both credible head-alignment and corroborated disc signatures are present; a record copied to tape is plausible.')
 
     phase_result = str(phase.get('result','')).lower()
     if ('delay' in phase_result or 'polarity' in phase_result) and phase.get('certainty') in USABLE:
@@ -217,6 +267,13 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
         elif low_bit:
             context.append('Low-bitrate compression may explain the restricted treble without an AM broadcast.')
 
+    if alignment_supported and not strong_disc and scores['Vinyl / Record']>=scores['Cassette / Tape']:
+        adjustment=scores['Cassette / Tape']-.5-scores['Vinyl / Record']
+        scores['Vinyl / Record']+=adjustment
+        reason='Head-alignment evidence is more discriminating than uncorroborated record-like noise; vinyl is ranked below tape unless independent disc signatures are strong.'
+        contributions['Vinyl / Record'].append({'points':round(adjustment,2),'reason':reason,'strength':'conflict adjustment'})
+        context.insert(0,reason)
+
     # Digital is a *fallback*, never inferred from the format of the uploaded
     # file. After a non-FM-specific notch, we still cannot tell the medium.
     strongest = max(scores[x] for x in LABELS if x != 'Digital source')
@@ -258,7 +315,7 @@ def score_origin(*, rotation, surface, broadcast, pilot, ndr, dropout,
     detail_parts.append('A recording may pass through radio, tape, disc and digital copies in succession.')
     ordered=sorted(scores.items(),key=lambda x:-x[1])
     return {'result':result,'certainty':certainty,'detail':' '.join(detail_parts),
-            'evidence':evidence[winner][:6], 'context':context,
+            'evidence':evidence[winner], 'context':context, 'score_contributions':contributions,
             'alternative':runner,'guess_percent':int(percent),
             'fallback_guess':winner=='Digital source',
             'metrics':{'clue_scores':{k:round(v,2) for k,v in ordered},

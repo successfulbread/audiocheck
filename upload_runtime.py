@@ -45,7 +45,8 @@ def analysis_slot():
 
 def _looks_like_audio(path):
     suffix = path.suffix.lower()
-    header = path.read_bytes()[:32]
+    with path.open("rb") as handle:
+        header = handle.read(32)
     if suffix == '.wav':
         return header.startswith(b'RIFF') and header[8:12] == b'WAVE'
     if suffix == '.flac':

@@ -21,10 +21,11 @@ from metadata_inspector import inspect_metadata
 from rds_inspector import inspect_rds
 from observations import enrich_findings
 from origin_fusion import score_origin
+from analog_evidence import measure_window, consolidate as consolidate_analog
 from forensics import (stereo_phase, pitch_tuning, track_reference_tone,
                        reference_candidates, speed_assessment)
 
-ANALYZER_VERSION = "2.7.2"
+ANALYZER_VERSION = "2.7.3"
 NOTCH_DETECTOR_VERSION = "2.7-stricter-two-shoulders"
 LOGGER = logging.getLogger("audiocheq.analyzer")
 
@@ -495,7 +496,7 @@ def _rotation_matches(times, target_period, relaxed=False):
             if best is None or score > best['score']:
                 best = {'score':score,'events':len(keys),'pairs':neighbors,
                         'span':span,'period':float(slope), 'fit_ms':fiterr*1000,
-                        'relaxed':relaxed}
+                        'relaxed':relaxed,'click_times_s':[round(float(v),4) for v in vals]}
     return best
 
 def _vinyl_window(audio):
@@ -509,7 +510,7 @@ def _vinyl_window(audio):
             strict = _rotation_matches(times, period, relaxed=False)
             evidence = strict or _rotation_matches(times, period, relaxed=True)
             if evidence and (rpm not in records or evidence['score'] > records[rpm]['score']):
-                records[rpm] = evidence
+                records[rpm] = {**evidence,'channel': 'L' if ch==0 else 'R'}
     if not records:
         return None
     ranked = sorted(records.items(),key=lambda item:(not item[1]['relaxed'],item[1]['score']),reverse=True)
@@ -589,6 +590,8 @@ def _surface_noise_window(audio):
             "frames": int(active.sum()),
             "clicks": int(len(events)),
             "quiet_clicks": quiet_clicks,
+            "channel": "L" if channel==0 else "R",
+            "click_times_s": events.round(4).tolist(),
             "irregular": irregular,
             "high_frequency_ratio": float(np.median(ratio[active])) if np.any(active) else 0.0,
         })
@@ -653,7 +656,7 @@ def _hiss_window(audio, original_rate):
     return {'usable':True,'quiet_frames':checked,'frames':blocks,
             'noise_dbfs':round(median_level,1),'flatness':round(median_flat,3),
             'ratio_db':round(typical_ratio,1),'persistent':round(persistence,3),
-            'spread_db':round(spread,1),'supported':bool(supported),
+            'spread_db':round(spread,1),'quiet_readings':[{'time':float(i)+.5,'noise_dbfs':round(float(x[i,1]),1),'flatness':round(float(x[i,3]),3)} for i in np.flatnonzero(quieter)],'supported':bool(supported),
             'possible':bool(possible)}
 
 
@@ -949,7 +952,7 @@ def _consolidate_wow(windows):
         best=max(measured,key=lambda w:w['rms_cents'])
     info={k:v for k,v in best.items() if k not in ('curve_seconds','curve_cents','mod_freq_hz','mod_power_db')}
     info['metrics']={k:best[k] for k in ('rms_cents','rate_hz','modulation_amplitude_cents',
-                                         'prominence_db','tone_hz','nominal_hz') if k in best}
+                                         'prominence_db','tone_hz','nominal_hz','slow_rms_cents','fast_rms_cents','slow_peak_hz','fast_peak_hz','slow_prominence_db','fast_prominence_db','valid_fast_band_hz') if k in best}
     info['detail']=(f'{len(measured)} of {len(windows)} sampled excerpts provided usable reference-tone tracks. '+info['detail'])
     return info
 
@@ -1016,18 +1019,18 @@ def _stereo_format(windows, channels):
         return verdict("Dual mono / near-mono", "High", "Two channels are nearly identical.")
     return verdict("Stereo", "High", "The uploaded channels differ measurably.")
 
-def _dropout_candidates(audio):
-    """Count brief near-silent interruptions, without inferring tape origin."""
+def _dropout_details(audio):
+    """Measure brief near-silent interruptions (50 ms bins)."""
     block = int(SAMPLE_RATE * .05)
     n = len(audio) // block
     if n < 100:
-        return 0
-    frames = audio[:n * block].reshape(n, block, 2).astype(float)
+        return {'tested':0,'events':[]}
+    frames = audio[:n * block].reshape(n, block, 2)
     rms = np.sqrt(np.mean(frames * frames, axis=(1, 2)))
     typical = ndimage.median_filter(rms, size=41, mode="reflect")
     quiet = (rms < typical * .10) & (typical > .003)
     labels, count = ndimage.label(quiet)
-    found = 0
+    found = []
     for idx in range(1, count + 1):
         points = np.flatnonzero(labels == idx)
         if not 2 <= len(points) <= 12:
@@ -1037,8 +1040,13 @@ def _dropout_candidates(audio):
             continue
         if rms[first-2:first].mean() > typical[first] * .55 and \
            rms[last+1:last+3].mean() > typical[last] * .55:
-            found += 1
-    return found
+            depth=20*np.log10(max(float(np.median(typical[points])),1e-12)/max(float(np.median(rms[points])),1e-12))
+            found.append({'start':round(first*.05,3),'end':round((last+1)*.05,3),'loss_db':round(float(depth),1)})
+    return {'tested':n,'events':found}
+
+
+def _dropout_candidates(audio):
+    return len(_dropout_details(audio)['events'])
 
 
 def _pilot_variation_hz(audio):
@@ -1374,7 +1382,10 @@ def _analyze_path(path, file_name=None, *, charts=False, plot_dir):
         wobble = (guarded("wow/flutter", lambda: track_reference_tone(
                       audio,refs[0]['observed'],refs[0]['nominal'],refs[0]['prominence_db']), None)
                   if refs else None)
+        drop_detail=guarded("interruption measurements",lambda:_dropout_details(audio),{'tested':0,'events':[]})
+        analog_window=guarded("analog wear measurements",lambda:measure_window(audio,metadata['input_rate'],metadata['channels']),{})
         analyzed.append({
+            "analog":analog_window,"dropout_detail":drop_detail,
             "vinyl": guarded("vinyl rotation",lambda: _vinyl_window(audio),None),
             "surface":guarded("surface noise",lambda: _surface_noise_window(audio),
                 {"quiet_frames":0,"crackly_frames":0,"frames":0,"clicks":0,
@@ -1383,7 +1394,7 @@ def _analyze_path(path, file_name=None, *, charts=False, plot_dir):
             "mains":mains,"broadcast":air,"cutoff":cutoff,
             "bandwidth_feature":guarded("audio bandwidth",lambda: _bandwidth_window(
                                      audio,metadata["input_rate"]),None),
-            "dropouts":guarded("audio dropouts",lambda: _dropout_candidates(audio),0),
+            "dropouts":len(drop_detail['events']),
             "clipped":float(np.mean(np.abs(audio) >= .998)),
             "pilot_jitter":pilot_jitter,"stereo_corr":stereo_corr,
             "phase":phase,"tuning":tuning,"wow":wobble,
@@ -1429,15 +1440,31 @@ def _analyze_path(path, file_name=None, *, charts=False, plot_dir):
                if interruption_count else verdict('None found', 'Not detected', 'No brief interruptions.'))
     bandwidth = _bandwidth_verdict(analyzed, metadata, broadcast)
     stereo = _stereo_format(analyzed, metadata['channels'])
+    analog_data=consolidate_analog(analyzed,analyzed_intervals)
+    # Save the actual fitted click positions, not hypothetical revolution ticks.
+    click_matches=[]
+    for w,(start,duration) in zip(analyzed,analyzed_intervals):
+        fit=w.get('vinyl')
+        if fit:
+            click_matches.append({'start_seconds':round(start,3),'rpm':round(fit['rpm'],3),'period_s':round(fit['period'],5),
+                'fit_error_ms':round(fit['fit_ms'],2),'channel':fit.get('channel'),'strict':not fit['relaxed'],
+                'click_times_s':[round(start+t,3) for t in fit.get('click_times_s',[])]})
+    rotation['click_matches']=click_matches
+    rotation['click_candidates_by_excerpt']=[{'start_seconds':round(start,3),'channel':(w.get('surface') or {}).get('channel'),
+        'click_times_s':[round(start+t,3) for t in (w.get('surface') or {}).get('click_times_s',[])]}
+        for w,(start,_) in zip(analyzed,analyzed_intervals)]
     source = score_origin(rotation=rotation, surface=surface, broadcast=broadcast,
                          pilot=pilot, ndr=ndr, dropout=dropout, bandwidth=bandwidth,
                          metadata=metadata, stereo=stereo, phase=phase_summary,
                          wow=wow_summary, power=electrical, speed=speed,
-                         rds=metadata["rds"], hiss=hiss)
+                         rds=metadata["rds"], hiss=hiss, analog=analog_data)
+    from analog_evidence import analog_card
+    wear=analog_card(analog_data,source,surface,hiss,wow_summary,dropout)
     # The frequency response supports the source guess, not an independent origin.
     source["frequency_clue"] = bandwidth
     rows=[
         ('Likely audio source',source),
+        ('Analog wear / transport',wear),
         ('Vinyl rotation',rotation),
         ('Likely power system',electrical),
         ('Radio / TV signals',broadcast),

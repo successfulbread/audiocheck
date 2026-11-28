@@ -1,34 +1,28 @@
-# AudioCheQ v2.7.2 — Memory and upload reliability
+# AudioCheQ v2.7.3 — Detailed analog measurements
 
-AudioCheQ is a Streamlit audio-forensic investigation app for recordings up to five minutes. It examines vinyl/shellac transfer clues, tape hiss, dropouts, transport speed variations, FM/TV/electrical interference, the historic 10 kHz broadcast notch, pitch, file metadata and optional raw-RDS captures.
+Web-based Streamlit app for lostwave audio investigation. This release keeps the existing 5-minute/100 MB limits, upload cleanup, responsive cards, NDR detector and FM cutoff gate.
 
-## What changed in v2.7.2
+## Install this update
 
-- Uploads are copied to a temporary disk file in 1 MiB chunks; the local upload handle is closed before decoding. The picker resets after success or failure. Reset upload / clear results is also available manually.
-- The previous report is dropped before analysis. One analysis per Python process is permitted at a time; a second user can retry after the first finishes.
-- Graph previews are temporarily stored on disk and loaded only for the selected graph. Figures, image buffers and temporary files are explicitly cleaned up.
-- Optional graph failures do not trigger a second full analysis. Upload receipt and current Linux resident memory are logged at analysis boundaries. The 100 MB / 5 minute limits are unchanged.
-- The origin-scoring, notch detector and existing layout are unchanged. Include the matching origin_fusion.py and reboot Streamlit after uploading the update.
+1. Extract `audiocheq-v273-measured-evidence-update.zip`.
+2. Upload **all extracted files** to the root of the existing GitHub repository (replace matching files; add the new modules). Do not upload the ZIP itself.
+3. Commit the changes and reboot the app in Streamlit Cloud. Confirm the title says **v2.7.3**, then upload a fresh recording.
 
-## What changed in v2.7.0
+The update assumes the current v2.7.2 installation. Use the full ZIP for a fresh deployment or if any supporting modules are missing. The full ZIP contains requirements, Streamlit configuration and tests. Run locally with `streamlit run app.py` after installing dependencies in `requirements.txt` and `packages.txt`.
 
-- **Prioritize analog evidence.** Vinyl crackle, rotational click patterns, a believable record-speed wobble, persistent tape-like hiss, transport speed instability and repeated dropouts all contribute more strongly to source assessment. Hiss is explicitly measured only in genuinely quiet passages and does not alone prove a cassette; a record can also carry hiss. An unreliable pitch tracker is never treated as wow/flutter.
-- **FM requires measured cutoff.** The top result can be FM only when a sharp, reproducible frequency cutoff around the usual 15 kHz FM audio limit is present **and** a supporting signal (pilot, 10 kHz notch or decoded RDS) exists. A low-bitrate MP3 cutoff is excluded. FM pilot and NDR reports remain visible even when they cannot qualify the overall FM verdict. FM path confidence refers to recorded/copying stages, not the source of the original musical performance.
-- **Less sensitive NDR test.** The 10 kHz filter must now be deeper, show both shoulders, outperform comparison bands and persist across checks. Notches can drift with tape speed. The two supplied NDR recordings still qualify, and EKT and the historical ragtime sample remain negative.
-- **Clearer cards.** The app now shows discrete **surface crackle**, **background hiss**, **dropouts** and **frequency range/cutoff** cards, in addition to the previous checks. Positive and unavailable statuses are distinguished; unmeasurable hiss is not reported as hiss-free.
-- **Fewer, more relevant details.** One **Why?** section per card defines its displayed terms (for example, RPM, Hz, dBFS, correlation, cents and RMS), interprets the specific measurement, and highlights limitations. Supporting raw observations are restricted to relevant measurements rather than showing long generic FFT diagnostics.
-- **Retained v2.6 features.** Two-column desktop results and single-column phone/tablet view; percentage origin score labelled as a heuristic estimate; annotated real spectrograms for hum, 10 kHz dip and high-frequency cutoff; stereo/phase information; embedded tags and RDS.
+## What changed
 
-## Install / update Streamlit Cloud
-
-1. Download the complete ZIP and **extract it**.
-2. Upload the update ZIP **contents** to the GitHub repository root. Replace `app.py`, `analyzer.py`, `audiocheq_engine_v270.py`, `spectrograms.py`, and `origin_fusion.py`; add `upload_runtime.py`. Keep all remaining library files alongside them.
-3. Commit to the actual deployed branch. In Streamlit Cloud, select **Manage app → Reboot app**.
-4. Confirm the heading reads **v2.7.2**, and that a *freshly uploaded* report says **Analyzed with engine: 2.7.2**. Re-upload a recording if the old report remains in session state.
-
-For a clean v2.6.0 installation, the five-file update ZIP is sufficient; otherwise prefer the full project.
+- One combined Analog wear, tape & disc measurements card: surface clicks/crackle, quiet-band hiss and variation, wow/flutter by modulation band, whole-signal interruptions, treble-only dropouts, changing stereo-delay/azimuth candidates, rumble and faint-copy similarity screening. Open **Why?** to see actual measurements and time locations.
+- Actual matched RPM click times, unmatched click candidates, channel, fitted period and fit error. All timestamps are relative to the uploaded file.
+- Tape-like evidence contributes directly to source scoring. Credible alignment evidence prevents weakly corroborated vinyl signatures from winning over tape. Strong independent disc clues can still win; the report notes possible mixed transfer chains. Origin and analog cards show the exact same weighted scores and individual contributions.
+- More numerical observations throughout the existing cards, including measured frequencies, harmonic observations, notch depth, candidate prominence, range/cutoff and pitch data. No new source categories or hosting dependencies.
+- Preserves bounded excerpt-based processing and releases temporary upload/plot files. Audio itself is not retained in the report.
 
 ## Interpretation limits
+
+A recording may pass through several media. Delay is compatible with tape-head azimuth, not a physical head measurement; mixing and digital processing can imitate it. Wow/flutter needs a reliable technical tone; faster modulation requires a sufficiently high and prominent reference. These are unweighted estimates, not calibrated industry wow/flutter measurements. A lack of a usable reference is reported as not measurable. A faint-copy similarity screen only compares content present in sampled excerpts; it cannot verify unknown audio from the opposite side of a cassette. Echo candidates are not scored as decisive medium evidence. All scores are heuristic evidence weights, not statistical probabilities. Results cover selected excerpts rather than every second of longer recordings.
+
+## Additional existing limitations
 
 - Source-origin percentages are **not calibrated statistical probabilities**. Multiple formats can appear along one recording chain. Hiss or lost treble may result from a later copy rather than an original cassette or broadcast.
 - The historical 10 kHz dip is **not unique to NDR**. 50/60 Hz hum and 15,625/15,734 Hz scan lines do not by themselves identify a country or a television broadcast.
